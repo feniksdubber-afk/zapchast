@@ -1,6 +1,6 @@
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { BottomNav } from "@/components/BottomNav";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import { HomePage } from "@/pages/Home";
