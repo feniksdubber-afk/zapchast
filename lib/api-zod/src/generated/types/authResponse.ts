@@ -5,9 +5,9 @@
  * Afsona TV API
  * OpenAPI spec version: 0.1.0
  */
+import type { UserProfile } from './userProfile';
 
-export interface Episode {
-  id: number;
-  seasonNumber: number;
-  episodeNumber: number;
+export interface AuthResponse {
+  token: string;
+  user: UserProfile;
 }

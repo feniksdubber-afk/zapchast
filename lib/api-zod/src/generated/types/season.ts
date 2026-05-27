@@ -5,9 +5,9 @@
  * Afsona TV API
  * OpenAPI spec version: 0.1.0
  */
+import type { Episode } from './episode';
 
-export interface Episode {
-  id: number;
+export interface Season {
   seasonNumber: number;
-  episodeNumber: number;
+  episodes: Episode[];
 }

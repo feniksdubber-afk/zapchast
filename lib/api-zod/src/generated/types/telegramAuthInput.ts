@@ -6,8 +6,6 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface Episode {
-  id: number;
-  seasonNumber: number;
-  episodeNumber: number;
+export interface TelegramAuthInput {
+  initData: string;
 }

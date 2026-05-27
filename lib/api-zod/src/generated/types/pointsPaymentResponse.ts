@@ -6,8 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface Episode {
-  id: number;
-  seasonNumber: number;
-  episodeNumber: number;
+export interface PointsPaymentResponse {
+  ok: boolean;
+  /** @nullable */
+  premiumUntil?: string | null;
 }
