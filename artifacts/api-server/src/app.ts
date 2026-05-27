@@ -42,7 +42,7 @@ if (isProd) {
   if (fs.existsSync(staticDir)) {
     app.use(express.static(staticDir));
 
-    app.get("*", (_req: Request, res: Response) => {
+    app.get("/{*path}", (_req: Request, res: Response) => {
       res.sendFile(path.join(staticDir, "index.html"));
     });
 
