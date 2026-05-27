@@ -1,0 +1,902 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: Afsona TV API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+  - name: auth
+  - name: movies
+  - name: series
+  - name: genres
+  - name: favorites
+  - name: history
+  - name: profile
+  - name: tariffs
+  - name: payments
+  - name: home
+  - name: search
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/telegram:
+    post:
+      operationId: authTelegram
+      tags: [auth]
+      summary: Authenticate via Telegram initData
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelegramAuthInput"
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Unauthorized
+
+  /auth/register-phone:
+    post:
+      operationId: registerPhone
+      tags: [auth]
+      summary: Register phone number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterPhoneInput"
+      responses:
+        "200":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required:
+                  - ok
+
+  /home/stats:
+    get:
+      operationId: getHomeStats
+      tags: [home]
+      summary: Home page statistics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HomeStats"
+
+  /genres:
+    get:
+      operationId: listGenres
+      tags: [genres]
+      summary: List all genres
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Genres list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Genre"
+
+  /movies/featured:
+    get:
+      operationId: getFeaturedMovies
+      tags: [movies]
+      summary: Get featured content for home page
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Featured content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeaturedContent"
+
+  /movies:
+    get:
+      operationId: listMovies
+      tags: [movies]
+      summary: List movies with filters and pagination
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 18
+        - name: genre
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Movies list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MovieListResponse"
+
+  /movies/{id}:
+    get:
+      operationId: getMovie
+      tags: [movies]
+      summary: Get movie detail by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Movie detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MovieDetail"
+        "404":
+          description: Not found
+
+  /movies/{id}/stream-url:
+    get:
+      operationId: getMovieStreamUrl
+      tags: [movies]
+      summary: Get movie stream URL
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Stream URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StreamUrlResponse"
+        "403":
+          description: Premium required
+        "404":
+          description: Not found
+
+  /series:
+    get:
+      operationId: listSeries
+      tags: [series]
+      summary: List series with pagination
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 18
+        - name: genre
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Series list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesListResponse"
+
+  /series/{id}:
+    get:
+      operationId: getSeriesDetail
+      tags: [series]
+      summary: Get series detail with seasons and episodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Series detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesDetail"
+        "404":
+          description: Not found
+
+  /episodes/{id}/stream-url:
+    get:
+      operationId: getEpisodeStreamUrl
+      tags: [series]
+      summary: Get episode stream URL
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Stream URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StreamUrlResponse"
+        "403":
+          description: Premium required
+        "404":
+          description: Not found
+
+  /search:
+    get:
+      operationId: searchContent
+      tags: [search]
+      summary: Search movies and series by title
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+
+  /favorites:
+    get:
+      operationId: listFavorites
+      tags: [favorites]
+      summary: Get user favorites
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Favorites list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FavoriteItem"
+    post:
+      operationId: toggleFavorite
+      tags: [favorites]
+      summary: Toggle movie or series favorite
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FavoriteToggleInput"
+      responses:
+        "200":
+          description: Toggled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  favorited:
+                    type: boolean
+                required:
+                  - favorited
+
+  /watch-history:
+    get:
+      operationId: getWatchHistory
+      tags: [history]
+      summary: Get user watch history
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Watch history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WatchHistoryItem"
+    post:
+      operationId: addWatchHistory
+      tags: [history]
+      summary: Record a watched movie or episode
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WatchHistoryInput"
+      responses:
+        "200":
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required:
+                  - ok
+
+  /users/profile:
+    get:
+      operationId: getUserProfile
+      tags: [profile]
+      summary: Get authenticated user profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+
+  /tariffs:
+    get:
+      operationId: listTariffs
+      tags: [tariffs]
+      summary: List premium tariffs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Tariffs list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Tariff"
+
+  /payments:
+    post:
+      operationId: createPayment
+      tags: [payments]
+      summary: Create a card payment for premium
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentInput"
+      responses:
+        "200":
+          description: Payment info with card details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+
+  /payments/points:
+    post:
+      operationId: buyWithPoints
+      tags: [payments]
+      summary: Buy premium using accumulated points
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PointsPaymentInput"
+      responses:
+        "200":
+          description: Purchased
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PointsPaymentResponse"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    TelegramAuthInput:
+      type: object
+      properties:
+        initData:
+          type: string
+      required:
+        - initData
+
+    RegisterPhoneInput:
+      type: object
+      properties:
+        phone:
+          type: string
+        tg_id:
+          type: integer
+      required:
+        - phone
+        - tg_id
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/UserProfile"
+      required:
+        - token
+        - user
+
+    UserProfile:
+      type: object
+      properties:
+        tgId:
+          type: integer
+        username:
+          type: ["string", "null"]
+        fullName:
+          type: string
+        lang:
+          type: string
+        isPremium:
+          type: boolean
+        premiumUntil:
+          type: ["string", "null"]
+        balance:
+          type: number
+        photoUrl:
+          type: ["string", "null"]
+      required:
+        - tgId
+        - fullName
+        - lang
+        - isPremium
+        - balance
+
+    HomeStats:
+      type: object
+      properties:
+        totalMovies:
+          type: integer
+        totalSeries:
+          type: integer
+        newThisWeek:
+          type: integer
+      required:
+        - totalMovies
+        - totalSeries
+        - newThisWeek
+
+    Genre:
+      type: object
+      properties:
+        name:
+          type: string
+        count:
+          type: integer
+      required:
+        - name
+        - count
+
+    MovieSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        posterUrl:
+          type: ["string", "null"]
+        year:
+          type: ["integer", "null"]
+        rating:
+          type: number
+        isPremium:
+          type: boolean
+        isSeries:
+          type: boolean
+      required:
+        - id
+        - title
+        - rating
+        - isPremium
+        - isSeries
+
+    MovieDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        posterUrl:
+          type: ["string", "null"]
+        year:
+          type: ["integer", "null"]
+        rating:
+          type: number
+        isPremium:
+          type: boolean
+        country:
+          type: ["string", "null"]
+        genres:
+          type: ["string", "null"]
+        description:
+          type: ["string", "null"]
+        views:
+          type: integer
+      required:
+        - id
+        - title
+        - rating
+        - isPremium
+        - views
+
+    SeriesSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        titleUz:
+          type: string
+        titleRu:
+          type: ["string", "null"]
+        posterUrl:
+          type: ["string", "null"]
+        year:
+          type: ["integer", "null"]
+        isPremium:
+          type: boolean
+        genres:
+          type: ["string", "null"]
+      required:
+        - id
+        - titleUz
+        - isPremium
+
+    Episode:
+      type: object
+      properties:
+        id:
+          type: integer
+        seasonNumber:
+          type: integer
+        episodeNumber:
+          type: integer
+      required:
+        - id
+        - seasonNumber
+        - episodeNumber
+
+    Season:
+      type: object
+      properties:
+        seasonNumber:
+          type: integer
+        episodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Episode"
+      required:
+        - seasonNumber
+        - episodes
+
+    SeriesDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        titleUz:
+          type: string
+        titleRu:
+          type: ["string", "null"]
+        posterUrl:
+          type: ["string", "null"]
+        year:
+          type: ["integer", "null"]
+        isPremium:
+          type: boolean
+        genres:
+          type: ["string", "null"]
+        description:
+          type: ["string", "null"]
+        seasons:
+          type: array
+          items:
+            $ref: "#/components/schemas/Season"
+      required:
+        - id
+        - titleUz
+        - isPremium
+        - seasons
+
+    FeaturedContent:
+      type: object
+      properties:
+        trending:
+          type: array
+          items:
+            $ref: "#/components/schemas/MovieSummary"
+        recent:
+          type: array
+          items:
+            $ref: "#/components/schemas/MovieSummary"
+        newSeries:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeriesSummary"
+      required:
+        - trending
+        - recent
+        - newSeries
+
+    MovieListResponse:
+      type: object
+      properties:
+        movies:
+          type: array
+          items:
+            $ref: "#/components/schemas/MovieSummary"
+        hasMore:
+          type: boolean
+        total:
+          type: integer
+      required:
+        - movies
+        - hasMore
+        - total
+
+    SeriesListResponse:
+      type: object
+      properties:
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeriesSummary"
+        hasMore:
+          type: boolean
+        total:
+          type: integer
+      required:
+        - series
+        - hasMore
+        - total
+
+    StreamUrlResponse:
+      type: object
+      properties:
+        url:
+          type: string
+      required:
+        - url
+
+    SearchResponse:
+      type: object
+      properties:
+        movies:
+          type: array
+          items:
+            $ref: "#/components/schemas/MovieSummary"
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeriesSummary"
+      required:
+        - movies
+        - series
+
+    FavoriteItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        movieId:
+          type: ["integer", "null"]
+        seriesId:
+          type: ["integer", "null"]
+        title:
+          type: string
+        posterUrl:
+          type: ["string", "null"]
+        isPremium:
+          type: boolean
+        type:
+          type: string
+      required:
+        - id
+        - title
+        - isPremium
+        - type
+
+    FavoriteToggleInput:
+      type: object
+      properties:
+        movieId:
+          type: ["integer", "null"]
+        seriesId:
+          type: ["integer", "null"]
+
+    WatchHistoryItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        movieId:
+          type: ["integer", "null"]
+        seriesId:
+          type: ["integer", "null"]
+        type:
+          type: string
+        seasonNumber:
+          type: ["integer", "null"]
+        episodeNumber:
+          type: ["integer", "null"]
+        watchedAt:
+          type: string
+      required:
+        - id
+        - title
+        - type
+        - watchedAt
+
+    WatchHistoryInput:
+      type: object
+      properties:
+        movieId:
+          type: ["integer", "null"]
+        seriesId:
+          type: ["integer", "null"]
+        seasonNumber:
+          type: ["integer", "null"]
+        episodeNumber:
+          type: ["integer", "null"]
+
+    Tariff:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        duration:
+          type: integer
+        price:
+          type: number
+        description:
+          type: ["string", "null"]
+        pointsPrice:
+          type: number
+      required:
+        - id
+        - name
+        - duration
+        - price
+        - pointsPrice
+
+    PaymentInput:
+      type: object
+      properties:
+        tariffId:
+          type: integer
+      required:
+        - tariffId
+
+    PaymentResponse:
+      type: object
+      properties:
+        paymentId:
+          type: integer
+        cardNumber:
+          type: string
+        cardOwner:
+          type: string
+        amount:
+          type: number
+        tariffName:
+          type: string
+      required:
+        - paymentId
+        - cardNumber
+        - cardOwner
+        - amount
+        - tariffName
+
+    PointsPaymentInput:
+      type: object
+      properties:
+        tariffId:
+          type: integer
+      required:
+        - tariffId
+
+    PointsPaymentResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        premiumUntil:
+          type: ["string", "null"]
+      required:
+        - ok
