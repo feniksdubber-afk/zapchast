@@ -174,6 +174,11 @@ class ArosAPIClient:
             query=query,
             page_size=settings.AROS_PAGE_SIZE,
         )
+        items_preview = data if isinstance(data, list) else (data.get("results") or data.get("data") or data.get("items") or [])
+        logger.debug(
+            "search query=%r -> %d ta natija qaytdi. Birinchi natija raw: %s",
+            query, len(items_preview), items_preview[0] if items_preview else None,
+        )
         return parse_search_results(data)
 
     async def get_similar(self, product_id: str | int) -> list[Product]:
