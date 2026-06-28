@@ -31,6 +31,9 @@ def build_product_caption(product: Product) -> str:
         💰 Narx: 370 000 so'm
         🏷 Eski narx: ~~405 000 so'm~~ (-9%)
         🛍 Chakana narx: 420 000 so'm
+        🏬 Omborda mavjud: 9 ta
+           • Farg'ona: 0
+           • Asosiy ombor: 9
         🔗 Ko'rish
     """
     lines = [f"📦 <b>{product.title}</b>", ""]
@@ -46,6 +49,13 @@ def build_product_caption(product: Product) -> str:
 
     if product.price_b2c is not None and product.price_b2c != product.price:
         lines.append(f"🛍 <b>Chakana narx:</b> {format_price(product.price_b2c)}")
+
+    # Ombor bloki
+    if product.warehouse_stocks:
+        lines.append("")
+        lines.append(f"🏬 <b>Omborda mavjud:</b> {product.total_stock} ta")
+        for w in product.warehouse_stocks:
+            lines.append(f"   • {w.name}: {w.quantity}")
 
     # Mahsulot havolasi
     if product.url:
