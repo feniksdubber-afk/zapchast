@@ -14,17 +14,31 @@ from services.grouping import ProductGroup, _variant_label
 
 
 def build_group_list_keyboard(groups: list[ProductGroup]) -> InlineKeyboardMarkup:
-    """Kategoriyalar ro'yxati — har biri tugma."""
+    """Kategoriyalar ro'yxati — har biri tugma (pagination tugmasisiz)."""
+    return build_group_list_keyboard_with_more(groups, next_cursor=None)
+
+
+def build_group_list_keyboard_with_more(
+    groups: list[ProductGroup],
+    next_cursor: str | None,
+) -> InlineKeyboardMarkup:
+    """
+    Kategoriyalar ro'yxati + ixtiyoriy "Ko'proq ➡️" tugmasi.
+
+    next_cursor berilsa — oxirida "Ko'proq" tugmasi qo'shiladi.
+    """
     builder = InlineKeyboardBuilder()
     for group in groups:
         if group.single:
-            # 1 ta variant → to'g'ridan product detail
             label = f"{group.part_name} — {format_price(group.variants[0].price)}"
             builder.button(text=label, callback_data=f"product:{group.variants[0].id}")
         else:
-            # Ko'p variant → variant tanlash ekraniga
             label = f"{group.part_name} ({group.count} ta variant)"
             builder.button(text=label, callback_data=f"group:{group.part_name}")
+
+    if next_cursor:
+        builder.button(text="➡️ Ko'proq natijalar", callback_data="search_more")
+
     builder.adjust(1)
     return builder.as_markup()
 
@@ -53,8 +67,14 @@ def build_product_list_keyboard(products: list[Product]) -> InlineKeyboardMarkup
 def build_product_detail_keyboard(product: Product) -> InlineKeyboardMarkup:
     """Mahsulot detail — savatga qo'shish, o'xshashlar, orqaga."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="🛒 Savatga qo'shish", callback_data=f"add_to_cart:{product.id}")
-    builder.button(text="🔍 O'xshash mahsulotlar", callback_data=f"similar:{product.id}")
+    builder.button(
+        text="🛒 Savatga qo'shish",
+        callback_data=f"add_to_cart:{product.id}",
+    )
+    builder.button(
+        text="🔍 O'xshash mahsulotlar",
+        callback_data=f"similar:{product.id}",
+    )
     if product.url:
         builder.button(text="🌐 Saytda ko'rish", url=product.url)
     builder.button(text="◀️ Orqaga", callback_data="back_to_groups")
