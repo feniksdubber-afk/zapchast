@@ -11,12 +11,11 @@ def format_price(amount: float) -> str:
     Narxni foydalanuvchiga qulay ko'rinishga keltiradi.
 
     Misol:
-        185000  → "185 000 so'm"
-        1250000 → "1 250 000 so'm"
-        99.5    → "99 so'm"  (tiyinlar uchun yaxlitlash)
+        185000   → "185 000 so'm"
+        1250000  → "1 250 000 so'm"
+        99.5     → "100 so'm"  (yaxlitlash)
     """
-    # Butun songa yaxlitlash (tiyin yo'q bo'lsa)
-    rounded = int(amount) if amount == int(amount) else amount
+    rounded = round(amount)
     formatted = f"{rounded:,}".replace(",", " ")
     return f"{formatted} so'm"
 
