@@ -1,11 +1,11 @@
 """
 Qidiruv va mahsulot ko'rish handlerlari.
+Natijalar kategoriya bo'yicha guruhlanib ko'rsatiladi.
 """
 
 import logging
 import sys
 import os
-import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -14,9 +14,14 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from keyboards.inline import build_product_list_keyboard, build_product_detail_keyboard
-from models import Product
+from keyboards.inline import (
+    build_group_list_keyboard,
+    build_variant_list_keyboard,
+    build_product_detail_keyboard,
+)
+from models import Product, ProductImage
 from services.api_client import ArosAPIError, get_api_client
+from services.grouping import group_products, ProductGroup
 from utils.formatting import build_product_caption
 
 logger = logging.getLogger(__name__)
@@ -32,7 +37,6 @@ ERROR_MESSAGES = {
 
 
 class SearchState(StatesGroup):
-    """Qidiruv natijalari holatini saqlash uchun FSM."""
     results = State()
 
 
@@ -48,7 +52,6 @@ def _get_error_text(error: ArosAPIError) -> str:
 
 
 def _products_to_dict(products: list[Product]) -> list[dict]:
-    """Product ro'yxatini JSON'ga saqlash uchun dict'ga aylantiradi."""
     return [
         {
             "id": str(p.id),
@@ -64,8 +67,6 @@ def _products_to_dict(products: list[Product]) -> list[dict]:
 
 
 def _dict_to_product(d: dict) -> Product:
-    """Dict'dan Product modelini qayta tiklaydi."""
-    from models import ProductImage
     return Product(
         id=d["id"],
         title=d["title"],
@@ -78,7 +79,6 @@ def _dict_to_product(d: dict) -> Product:
 
 
 async def _send_product(message: Message, product: Product, keyboard) -> None:
-    """Mahsulotni rasm yoki matn sifatida yuboradi."""
     caption = build_product_caption(product)
     if product.main_image_url:
         try:
@@ -120,19 +120,64 @@ async def handle_search(message: Message, state: FSMContext) -> None:
         )
         return
 
-    # Natijalarni FSM state'ga saqlaymiz — tugma bosilganda topib olinadi
-    await state.set_state(SearchState.results)
-    await state.update_data(products=_products_to_dict(products))
+    # Guruhlash
+    groups = group_products(products)
 
-    keyboard = build_product_list_keyboard(products)
+    await state.set_state(SearchState.results)
+    await state.update_data(
+        products=_products_to_dict(products),
+        last_query=query,
+    )
+
+    # Agar faqat 1 ta guruh va 1 ta variant — to'g'ridan detail
+    if len(groups) == 1 and groups[0].single:
+        keyboard = build_product_detail_keyboard(groups[0].variants[0])
+        await _send_product(message, groups[0].variants[0], keyboard)
+        return
+
+    keyboard = build_group_list_keyboard(groups)
+
+    # Guruhlar soni va umumiy variantlar
+    total_variants = sum(g.count for g in groups)
+    group_count = len(groups)
+
     await message.answer(
-        f"✅ <b>'{query}'</b> bo'yicha <b>{len(products)}</b> ta natija topildi:\n"
-        "Mahsulotni tanlang 👇",
+        f"🔍 <b>'{query}'</b> — {total_variants} ta natija, {group_count} ta kategoriya:\n"
+        "Kategoriyani tanlang 👇",
         reply_markup=keyboard,
     )
 
 
-# ─── HANDLER 2: Mahsulot detail ──────────────────────────────────────────────
+# ─── HANDLER 2: Kategoriya bosildi → variantlar ─────────────────────────────
+
+@router.callback_query(F.data.startswith("group:"))
+async def handle_group_select(callback: CallbackQuery, state: FSMContext) -> None:
+    part_name = callback.data.split(":", 1)[1]
+    await callback.answer()
+
+    data = await state.get_data()
+    saved_products = data.get("products", [])
+    query = data.get("last_query", "")
+
+    all_products = [_dict_to_product(p) for p in saved_products]
+
+    # Shu kategoriyaga tegishli variantlarni topamiz
+    groups = group_products(all_products)
+    group = next((g for g in groups if g.part_name == part_name), None)
+
+    if not group:
+        await callback.message.answer("❌ Kategoriya topilmadi. Qayta qidiring.")
+        return
+
+    keyboard = build_variant_list_keyboard(group)
+    await callback.message.answer(
+        f"📦 <b>{part_name}</b> — {group.count} ta variant:\n"
+        "Variantni tanlang 👇",
+        reply_markup=keyboard,
+    )
+
+
+# ─── HANDLER 3: Variant/mahsulot detail ─────────────────────────────────────
 
 @router.callback_query(F.data.startswith("product:"))
 async def handle_product_detail(callback: CallbackQuery, state: FSMContext) -> None:
@@ -142,25 +187,50 @@ async def handle_product_detail(callback: CallbackQuery, state: FSMContext) -> N
     if not callback.message:
         return
 
-    # FSM'dan saqlangan natijalar ichidan ID bo'yicha topamiz
     data = await state.get_data()
     saved_products = data.get("products", [])
 
-    product = next(
+    product_dict = next(
         (p for p in saved_products if str(p["id"]) == str(product_id)),
         None
     )
 
-    if not product:
-        await callback.message.answer("❌ Mahsulot ma'lumotlari topilmadi. Qayta qidiring.")
+    if not product_dict:
+        await callback.message.answer("❌ Mahsulot topilmadi. Qayta qidiring.")
         return
 
-    p = _dict_to_product(product)
+    p = _dict_to_product(product_dict)
     keyboard = build_product_detail_keyboard(p)
     await _send_product(callback.message, p, keyboard)
 
 
-# ─── HANDLER 3: O'xshash mahsulotlar ─────────────────────────────────────────
+# ─── HANDLER 4: Kategoriyalar ro'yxatiga qaytish ────────────────────────────
+
+@router.callback_query(F.data == "back_to_groups")
+async def handle_back_to_groups(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+
+    data = await state.get_data()
+    saved_products = data.get("products", [])
+    query = data.get("last_query", "")
+
+    if not saved_products:
+        await callback.message.answer("🔍 Yangi qidiruv uchun mahsulot nomini yozing.")
+        return
+
+    all_products = [_dict_to_product(p) for p in saved_products]
+    groups = group_products(all_products)
+    keyboard = build_group_list_keyboard(groups)
+
+    total_variants = sum(g.count for g in groups)
+    await callback.message.answer(
+        f"🔍 <b>'{query}'</b> — {total_variants} ta natija:\n"
+        "Kategoriyani tanlang 👇",
+        reply_markup=keyboard,
+    )
+
+
+# ─── HANDLER 5: O'xshash mahsulotlar ────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("similar:"))
 async def handle_similar_products(callback: CallbackQuery, state: FSMContext) -> None:
@@ -186,21 +256,16 @@ async def handle_similar_products(callback: CallbackQuery, state: FSMContext) ->
         await callback.message.answer("😕 O'xshash mahsulotlar topilmadi.")
         return
 
-    # O'xshash natijalarni ham state'ga saqlaymiz
-    await state.update_data(products=_products_to_dict(similar_products))
+    groups = group_products(similar_products)
 
-    from keyboards.inline import build_product_list_keyboard
-    keyboard = build_product_list_keyboard(similar_products)
-    await callback.message.answer(
-        f"🔗 <b>{len(similar_products)}</b> ta o'xshash mahsulot topildi:",
-        reply_markup=keyboard,
+    await state.update_data(
+        products=_products_to_dict(similar_products),
+        last_query="o'xshash mahsulotlar",
     )
 
-
-# ─── HANDLER 4: Orqaga ───────────────────────────────────────────────────────
-
-@router.callback_query(F.data == "back_to_search")
-async def handle_back(callback: CallbackQuery) -> None:
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer("🔍 Yangi qidiruv uchun mahsulot nomini yozing:")
+    keyboard = build_group_list_keyboard(groups)
+    total = sum(g.count for g in groups)
+    await callback.message.answer(
+        f"🔗 <b>{total}</b> ta o'xshash mahsulot:",
+        reply_markup=keyboard,
+    )
