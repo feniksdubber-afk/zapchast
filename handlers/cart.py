@@ -3,9 +3,12 @@ Savat handlerlari.
 Ko'rish, qo'shish, o'chirish, miqdor o'zgartirish.
 """
 
+import asyncio
 import logging
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from collections import defaultdict
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -19,6 +22,11 @@ from utils.formatting import format_price
 
 logger = logging.getLogger(__name__)
 router = Router(name="cart")
+
+# Har bir foydalanuvchi uchun alohida lock — bitta odam ➕/➖ tugmasini
+# ketma-ket tez bosganda ikkinchi so'rov birinchisi tugaguncha kutadi.
+# Bu "eski miqdordan hisoblash" race condition'ini oldini oladi.
+_cart_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 def _require_token(token: str | None) -> bool:
@@ -123,16 +131,21 @@ async def handle_cart_inc(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("❌ Login kerak!", show_alert=True)
         return
 
-    try:
-        async with get_api_client(token=token) as api:
-            items = await api.get_cart()
-            current = next((i for i in items if i.product_variant_id == variant_id), None)
-            new_qty = (current.quantity + 1) if current else 1
-            await api.add_to_cart(variant_id, quantity=new_qty)
-            items = await api.get_cart()
-    except ArosAPIError as e:
-        await callback.answer(f"❌ {e}", show_alert=True)
-        return
+    # Bir xil foydalanuvchi ➕/➖ tugmasini tez ketma-ket bossa, ikkinchi
+    # so'rov birinchisi tugaguncha kutadi — eski miqdordan hisoblanib
+    # qolish (race condition) shu tariqa oldini olinadi.
+    lock = _cart_locks[callback.from_user.id]
+    async with lock:
+        try:
+            async with get_api_client(token=token) as api:
+                items = await api.get_cart()
+                current = next((i for i in items if i.product_variant_id == variant_id), None)
+                new_qty = (current.quantity + 1) if current else 1
+                await api.add_to_cart(variant_id, quantity=new_qty)
+                items = await api.get_cart()
+        except ArosAPIError as e:
+            await callback.answer(f"❌ {e}", show_alert=True)
+            return
 
     await callback.answer("➕ Miqdor oshirildi")
     if callback.message:
@@ -154,21 +167,23 @@ async def handle_cart_dec(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("❌ Login kerak!", show_alert=True)
         return
 
-    try:
-        async with get_api_client(token=token) as api:
-            items = await api.get_cart()
-            current = next((i for i in items if i.product_variant_id == variant_id), None)
+    lock = _cart_locks[callback.from_user.id]
+    async with lock:
+        try:
+            async with get_api_client(token=token) as api:
+                items = await api.get_cart()
+                current = next((i for i in items if i.product_variant_id == variant_id), None)
 
-            if current and current.quantity > 1:
-                await api.add_to_cart(variant_id, quantity=current.quantity - 1)
-            else:
-                # 1 ta qolsa — o'chirib yuboramiz
-                await api.remove_from_cart(variant_id)
+                if current and current.quantity > 1:
+                    await api.add_to_cart(variant_id, quantity=current.quantity - 1)
+                else:
+                    # 1 ta qolsa — o'chirib yuboramiz
+                    await api.remove_from_cart(variant_id)
 
-            items = await api.get_cart()
-    except ArosAPIError as e:
-        await callback.answer(f"❌ {e}", show_alert=True)
-        return
+                items = await api.get_cart()
+        except ArosAPIError as e:
+            await callback.answer(f"❌ {e}", show_alert=True)
+            return
 
     await callback.answer("➖ Miqdor kamaytirildi")
     if callback.message:
@@ -190,13 +205,15 @@ async def handle_cart_del(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("❌ Login kerak!", show_alert=True)
         return
 
-    try:
-        async with get_api_client(token=token) as api:
-            await api.remove_from_cart(variant_id)
-            items = await api.get_cart()
-    except ArosAPIError as e:
-        await callback.answer(f"❌ {e}", show_alert=True)
-        return
+    lock = _cart_locks[callback.from_user.id]
+    async with lock:
+        try:
+            async with get_api_client(token=token) as api:
+                await api.remove_from_cart(variant_id)
+                items = await api.get_cart()
+        except ArosAPIError as e:
+            await callback.answer(f"❌ {e}", show_alert=True)
+            return
 
     await callback.answer("🗑 O'chirildi")
     if callback.message:
