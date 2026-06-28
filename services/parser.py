@@ -19,14 +19,8 @@ def _parse_warehouses(raw: dict) -> list[WarehouseStock]:
         "variation_quantity": [
             {"warehouse": {"name_uz": "Farg'ona", ...}, "quantity": 1,
              "available": true, "deliver_at": null, "days_after": null},
-            {"warehouse": {"name_uz": "Asosiy ombor", ...}, "quantity": 28,
-             "available": false, "deliver_at": "16:00:00", "days_after": 1},
             ...
         ]
-
-    Boshqa nomlar (warehouses, stocks va h.k.) zaxira variant sifatida
-    qoldirilgan — agar Aros API kelajakda boshqa endpointda boshqacha
-    kalit ishlatsa ham parser ishlashda davom etadi.
     """
     candidates = (
         raw.get("variation_quantity")
@@ -40,8 +34,8 @@ def _parse_warehouses(raw: dict) -> list[WarehouseStock]:
 
     if not candidates or not isinstance(candidates, list):
         logger.debug(
-            "Ombor ma'lumoti topilmadi. Mahsulot raw keys: %s | to'liq raw: %s",
-            list(raw.keys()), raw,
+            "Ombor ma'lumoti topilmadi. Mahsulot raw keys: %s",
+            list(raw.keys()),
         )
         return []
 
@@ -50,8 +44,6 @@ def _parse_warehouses(raw: dict) -> list[WarehouseStock]:
         if not isinstance(item, dict):
             continue
 
-        # Ombor nomi turlicha joylashgan bo'lishi mumkin:
-        # {"name": "..."} yoki {"warehouse": {"name_uz": "..."}}
         warehouse_obj = item.get("warehouse")
         if isinstance(warehouse_obj, dict):
             name = (
@@ -94,12 +86,6 @@ def _parse_warehouses(raw: dict) -> list[WarehouseStock]:
                 days_after=days_after,
             ))
 
-    if not result:
-        logger.debug(
-            "Ombor ro'yxati topildi, lekin parse qilinmadi. raw candidates: %s",
-            candidates,
-        )
-
     return result
 
 
@@ -108,7 +94,7 @@ def _parse_image(raw: Any) -> ProductImage | None:
         return ProductImage(url=raw)
     if not isinstance(raw, dict):
         return None
-    # Aros API: images[].file — asl rasm, small_image_size/medium_image_size — kichraytirilgan versiyalar
+    # Aros API: medium_image_size (500x500) yaxshi sifat uchun
     url = (
         raw.get("medium_image_size")
         or raw.get("file")
@@ -137,39 +123,81 @@ _COLOR_NAMES = {
 }
 
 
+def _extract_brand_from_raw(raw: dict) -> str:
+    """
+    Mahsulot raw data'sidan brand nomini ajratib oladi.
+
+    Ikkita endpoint turli shaklda brand beradi:
+      - cursor-search: product_models[0].brand.title
+      - similar/category: manufacture_brand.title  YO  product_models[0].brand.title
+
+    name_uz allaqachon brand nomini o'z ichiga olsa (masalan cursor-search
+    da "Samsung Galaxy A12") — bo'sh qaytaramiz, takrorlanmasin.
+    """
+    # 1. product_models dan brand olish (cursor-search va similar ikkisida bor)
+    pm = raw.get("product_models") or []
+    if pm and isinstance(pm, list) and isinstance(pm[0], dict):
+        brand_obj = pm[0].get("brand") or {}
+        brand = brand_obj.get("title") or brand_obj.get("title_uz") or ""
+        if brand:
+            # name_uz allaqachon brand nomini o'z ichiga olganmi?
+            name_uz = raw.get("name_uz") or raw.get("name") or ""
+            if brand.lower() in name_uz.lower():
+                return ""  # Takrorlanmasin
+            return brand
+
+    # 2. manufacture_brand (similar/category endpointda keladi)
+    mb = raw.get("manufacture_brand") or {}
+    if isinstance(mb, dict):
+        brand = mb.get("title") or mb.get("title_uz") or ""
+        if brand:
+            name_uz = raw.get("name_uz") or raw.get("name") or ""
+            if brand.lower() in name_uz.lower():
+                return ""
+            return brand
+
+    return ""
+
+
 def _build_title(raw: dict) -> str:
     """
-    Telefon modeli + ehtiyot qism turi + sifat ko'rinishida nom yasaydi.
-    Masalan: "Xiaomi 9T/9T Pro/K20/K20 Pro — Ekran (Oled big)"
+    Mahsulot nomini quradi: Brand Model — Kategoriya (Sifat)
 
-    Aros API'ning search natijasida attribute_values elementlarida
-    "attribute" (masalan {"name_uz": "Sifati"}) kaliti kelmaydi — faqat
-    {"id", "value", "value_uz", ...} bor. Shu sababli Sifat qiymatini
-    aniqlash uchun rang nomlari ro'yxatidan FOYDALANMAYDIGAN birinchi
-    qiymat "sifat" deb olinadi (rang odatda birinchi keladi, lekin
-    ishonchli bo'lishi uchun rang ro'yxati bilan ham solishtiriladi).
+    Misol:
+      cursor-search: "Samsung Galaxy A12 (A125) — Ekran (Original Frame)"
+      similar:       "Tecno Spark Go 2023 — Ekran (Original)"
+      NOVA V (brand yo'q): "NOVA V — Ekran (Original)"
     """
     base_name = (raw.get("name_uz") or raw.get("name") or "").strip()
+
+    # Brand nomini oldindan qo'shamiz (agar name_uz da yo'q bo'lsa)
+    brand = _extract_brand_from_raw(raw)
+    if brand and base_name and not base_name.lower().startswith(brand.lower()):
+        base_name = f"{brand} {base_name}"
 
     category = raw.get("category") or {}
     part_name = (category.get("name_uz") or category.get("name") or "").strip()
 
     # "Sifati" qiymatini attribute_values ichidan topamiz.
-    # Avval "attribute": {"name_uz": "Sifati"} strukturasi bo'lsa shuni ishlatamiz
-    # (boshqa endpointlarda shu shaklda kelishi mumkin), aks holda rang
-    # ro'yxatiga mos kelmaydigan qiymatni "sifat" deb olamiz.
+    # Ikkita format mavjud:
+    #   1. cursor-search: {id, value_uz} — "attribute" kalit YO'Q
+    #      → rang nomlariga mos kelmaydigan birinchi qiymat "sifat"
+    #   2. similar/category: {id, value_uz, attribute: {name_uz: "Sifati"}}
+    #      → "Sifati" nomli attribute aniq topiladi
     quality = None
     fallback_candidates: list[str] = []
+
     for attr_val in raw.get("attribute_values") or []:
         if not isinstance(attr_val, dict):
             continue
         attr = attr_val.get("attribute") or {}
         attr_name = (attr.get("name_uz") or attr.get("name") or "").lower()
         value = attr_val.get("value_uz") or attr_val.get("value")
+
         if "sifat" in attr_name or "quality" in attr_name:
             quality = value
             break
-        # color_hex mavjudligi — bu element rang ekanligining ishonchli belgisi
+
         is_color = bool(attr_val.get("color_hex")) or (
             value and value.strip().lower() in _COLOR_NAMES
         )
@@ -197,7 +225,6 @@ def parse_product(raw: dict) -> Product | None:
 
     price_b2c = _parse_price(raw.get("price_b2c"))
 
-    # discount mavjud bo'lsa — chegirmali narx asosiy, asl narx "eski narx" bo'lib ko'rsatiladi
     discount = raw.get("discount") or {}
     discount_price = _parse_price(discount.get("price")) if isinstance(discount, dict) else None
 
@@ -212,7 +239,11 @@ def parse_product(raw: dict) -> Product | None:
     images = [img for raw_img in raw_images if (img := _parse_image(raw_img))]
 
     product_id = raw.get("id") or raw.get("variant_id") or raw.get("pk") or ""
-    product_url = raw.get("url") or raw.get("link") or raw.get("absolute_url")
+    # link field bo'sh string bo'lishi mumkin — None ga tenglashtirish
+    product_url = raw.get("url") or raw.get("link") or raw.get("absolute_url") or None
+    if product_url == "":
+        product_url = None
+
     warehouse_stocks = _parse_warehouses(raw)
 
     return Product(

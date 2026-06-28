@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional
+from urllib.parse import urlparse, parse_qs
 
 import httpx
 
@@ -29,7 +30,7 @@ class ArosAPIError(Exception):
 class ArosAPIClient:
     def __init__(self, token: Optional[str] = None) -> None:
         self._client: httpx.AsyncClient | None = None
-        self._token = token  # Autentifikatsiya tokeni (login qilingan bo'lsa)
+        self._token = token
 
     def _build_headers(self) -> dict:
         headers = {"Accept": "application/json", "User-Agent": "ArosMarketBot/1.0"}
@@ -49,19 +50,12 @@ class ArosAPIClient:
             await self._client.aclose()
 
     def _url(self, path: str) -> str:
-        """To'liq URL yaratadi — v1 yoki web/v2 endpointlar uchun."""
         if path.startswith("/web/"):
             return f"https://api.aros.uz/api{path}"
         return f"{settings.AROS_BASE_URL}{path}"
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict | list:
-        """Umumiy HTTP so'rov metodi.
-
-        Faqat vaqtincha bo'lishi mumkin bo'lgan xatolar qayta uriniladi:
-        timeout, ulanish xatosi, va 5xx server xatolari. 4xx (400/401/404)
-        — bu mijoz xatosi, qayta urinish natijani o'zgartirmaydi, shuning
-        uchun darhol ko'tariladi.
-        """
+        """Umumiy HTTP so'rov metodi. Vaqtincha xatolarda qayta urinadi."""
         assert self._client
         last_error: Exception | None = None
 
@@ -83,15 +77,18 @@ class ArosAPIClient:
                     logger.warning("400 Bad Request [%s]: %s", path, detail)
                     raise ArosAPIError(f"So'rov xato: {detail}", status_code=400)
                 if response.status_code >= 500:
-                    last_error = ArosAPIError(f"Server xatoligi: {response.status_code}", status_code=response.status_code)
-                    logger.warning("5xx xato [urinish %d/%d]: %s -> %d", attempt, settings.HTTP_MAX_RETRIES, path, response.status_code)
+                    last_error = ArosAPIError(
+                        f"Server xatoligi: {response.status_code}",
+                        status_code=response.status_code,
+                    )
+                    logger.warning("5xx xato [urinish %d/%d]: %s -> %d",
+                                   attempt, settings.HTTP_MAX_RETRIES, path, response.status_code)
                     if attempt < settings.HTTP_MAX_RETRIES:
                         await asyncio.sleep(0.5 * attempt)
                         continue
                     raise last_error
 
                 response.raise_for_status()
-
                 if response.content:
                     return response.json()
                 return {}
@@ -124,19 +121,12 @@ class ArosAPIClient:
     # ─── AUTH ────────────────────────────────────────────────────────────────
 
     async def send_sms(self, phone: str) -> None:
-        """Telefon raqamga SMS kod yuboradi.
-
-        Aros'ning rasmiy saytida ushbu so'rov alohida endpointga ketadi
-        (get_verification_code), va "code" maydoni umuman yuborilmaydi —
-        faqat telefon raqam va verification_type.
-        """
         await self._post("/web/v2/users/get_verification_code/", {
             "verification_type": "login",
             "phone_number": phone,
         })
 
     async def verify_sms(self, phone: str, code: str) -> str:
-        """SMS kodni tekshiradi va token qaytaradi."""
         data = await self._post("/web/v2/users/login/", {
             "verification_type": "login",
             "phone_number": phone,
@@ -148,33 +138,89 @@ class ArosAPIClient:
         return token
 
     async def get_profile(self) -> UserProfile:
-        """Foydalanuvchi profilini qaytaradi (token kerak)."""
         data = await self._get("/user/me/")
         if not isinstance(data, dict):
             raise ArosAPIError("Profil ma'lumotlari noto'g'ri.")
-        warehouse     = data.get("warehouse") or {}
+
+        # warehouse int yoki dict bo'lishi mumkin — ikkalasini ham qo'llab-quvvatlaymiz
+        warehouse = data.get("warehouse") or {}
         send_warehouse = data.get("send_warehouse") or {}
+
+        if isinstance(warehouse, int):
+            warehouse_id = warehouse
+            warehouse_name = ""
+            region_id = None
+        elif isinstance(warehouse, dict):
+            warehouse_id = warehouse.get("id")
+            warehouse_name = warehouse.get("name") or warehouse.get("name_uz") or ""
+            region_id = warehouse.get("region") or warehouse.get("region_id")
+        else:
+            warehouse_id = None
+            warehouse_name = ""
+            region_id = None
+
+        if isinstance(send_warehouse, int):
+            send_warehouse_id = send_warehouse
+        elif isinstance(send_warehouse, dict):
+            send_warehouse_id = send_warehouse.get("id")
+        else:
+            send_warehouse_id = None
+
         return UserProfile(
             id=data.get("id", 0),
             phone=data.get("username", ""),
             first_name=data.get("first_name", ""),
             last_name=data.get("last_name", ""),
             cashback_balance=float(data.get("cashback_balance", 0)),
-            warehouse_name=warehouse.get("name", ""),
+            warehouse_name=warehouse_name,
             role=data.get("role", ""),
-            warehouse_id=warehouse.get("id") or (warehouse if isinstance(warehouse, int) else None),
-            send_warehouse_id=send_warehouse.get("id") if isinstance(send_warehouse, dict) else send_warehouse or None,
+            warehouse_id=warehouse_id,
+            send_warehouse_id=send_warehouse_id,
+            region_id=region_id,
         )
 
     # ─── MAHSULOT ────────────────────────────────────────────────────────────
 
-    async def search(self, query: str) -> list[Product]:
+    async def search(
+        self,
+        query: str,
+        search_after: str | None = None,
+    ) -> tuple[list[Product], str | None]:
+        """
+        Mahsulot qidiradi.
+
+        Returns:
+            (products, next_cursor) — next_cursor keyingi sahifa uchun,
+            None bo'lsa — oxirgi sahifa.
+        """
+        params: dict[str, Any] = {
+            "query": query,
+            "page_size": settings.AROS_PAGE_SIZE,
+        }
+        if search_after:
+            params["search_after"] = search_after
+
         data = await self._get(
             "/product/product_variant_list/cursor-search/",
-            query=query,
-            page_size=settings.AROS_PAGE_SIZE,
+            **params,
         )
-        return parse_search_results(data)
+
+        products = parse_search_results(data)
+
+        # Keyingi cursor ni ajratib olamiz
+        next_cursor: str | None = None
+        if isinstance(data, dict):
+            next_url = data.get("next")
+            if next_url:
+                try:
+                    qs = parse_qs(urlparse(next_url).query)
+                    cursors = qs.get("search_after", [])
+                    if cursors:
+                        next_cursor = cursors[0]
+                except Exception:
+                    pass
+
+        return products, next_cursor
 
     async def get_similar(self, product_id: str | int) -> list[Product]:
         data = await self._get(f"/product/get_similar_product_variants/{product_id}/")
@@ -183,25 +229,25 @@ class ArosAPIClient:
     # ─── SAVAT ───────────────────────────────────────────────────────────────
 
     async def get_cart(self) -> list[CartItem]:
-        """Savatdagi mahsulotlar ro'yxatini qaytaradi."""
         data = await self._get("/web/v2/cart/items/")
-        logger.debug("get_cart raw response type=%s keys=%s", type(data).__name__,
-                     list(data.keys()) if isinstance(data, dict) else "list")
-        logger.info("get_cart raw data: %s", data)
+        logger.debug("get_cart raw response type=%s", type(data).__name__)
+
         if isinstance(data, list):
             items = data
         elif isinstance(data, dict):
-            # Barcha mumkin bo'lgan key'larni tekshiramiz
-            items = (data.get("results")
-                     or data.get("items")
-                     or data.get("data")
-                     or data.get("cart_items")
-                     or [])
+            items = (
+                data.get("results")
+                or data.get("items")
+                or data.get("data")
+                or data.get("cart_items")
+                or []
+            )
+        else:
+            items = []
 
         cart = []
         for item in items:
             variant = item.get("product_variant") or {}
-            # API ba'zan variant ni dict, ba'zan int sifatida berishi mumkin
             if isinstance(variant, int):
                 variant_id = variant
                 title = item.get("title", "Noma'lum")
@@ -209,8 +255,16 @@ class ArosAPIClient:
                 image_url = None
             else:
                 variant_id = variant.get("id", item.get("product_variant_id", 0))
-                title = variant.get("title") or variant.get("name") or item.get("title", "Noma'lum")
-                price = float(variant.get("selling_price") or variant.get("price") or item.get("price", 0))
+                title = (
+                    variant.get("title")
+                    or variant.get("name")
+                    or item.get("title", "Noma'lum")
+                )
+                price = float(
+                    variant.get("selling_price")
+                    or variant.get("price")
+                    or item.get("price", 0)
+                )
                 images = variant.get("images") or []
                 image_url = images[0].get("image") if images else None
 
@@ -224,12 +278,6 @@ class ArosAPIClient:
         return cart
 
     async def add_to_cart(self, variant_id: int, quantity: int = 1) -> None:
-        """Savatga mahsulot qo'shadi yoki miqdorini yangilaydi.
-
-        Eslatma: Aros API bu endpointga dict o'rniga list (massiv)
-        kutadi — "Expected a list of items but got type 'dict'" xatosi
-        shundan kelib chiqadi.
-        """
         await self._post("/web/v2/cart/items/add/", [{
             "origin": "client",
             "product_variant": variant_id,
@@ -237,27 +285,24 @@ class ArosAPIClient:
         }])
 
     async def remove_from_cart(self, variant_id: int) -> None:
-        """Savatdan mahsulotni o'chiradi."""
         await self._delete(f"/web/v2/cart/items/delete/{variant_id}/")
 
     # ─── CHECKOUT ────────────────────────────────────────────────────────────
 
-    async def get_payment_methods(self) -> list["PaymentMethod"]:
-        """To'lov usullarini qaytaradi."""
+    async def get_payment_methods(self) -> list:
         from models import PaymentMethod
         data = await self._get("/web/v2/orders/payment_methods/")
         items = data if isinstance(data, list) else data.get("results", [])
-        result = []
-        for item in items:
-            result.append(PaymentMethod(
-                id=item.get("id", 0),
-                name=item.get("name", ""),
-                display_name=item.get("display_name") or item.get("name", ""),
-            ))
-        return result
+        return [
+            PaymentMethod(
+                id=it.get("id", 0),
+                name=it.get("name", ""),
+                display_name=it.get("display_name") or it.get("name", ""),
+            )
+            for it in items
+        ]
 
-    async def get_order_addresses(self, region: int, delivery_method: int) -> list["DeliveryAddress"]:
-        """Mintaqa va yetkazish usuliga mos manzillarni qaytaradi."""
+    async def get_order_addresses(self, region: int, delivery_method: int) -> list:
         from models import DeliveryAddress
         data = await self._get(
             "/web/v2/orders/order_page_addresses/",
@@ -265,47 +310,41 @@ class ArosAPIClient:
             delivery_method=delivery_method,
         )
         items = data if isinstance(data, list) else data.get("results", [])
-        result = []
-        for item in items:
-            result.append(DeliveryAddress(
-                id=item.get("id", 0),
-                name=item.get("name", ""),
-                street=item.get("street", ""),
-                building_number=item.get("building_number", ""),
-                landmark=item.get("landmark"),
-            ))
-        return result
+        return [
+            DeliveryAddress(
+                id=it.get("id", 0),
+                name=it.get("name", ""),
+                street=it.get("street", ""),
+                building_number=it.get("building_number", ""),
+                landmark=it.get("landmark"),
+            )
+            for it in items
+        ]
 
-    async def get_delivery_methods(self) -> tuple[list["DeliveryMethod"], list["DeliveryMethod"]]:
-        """Enabled va disabled yetkazib berish usullarini qaytaradi."""
+    async def get_delivery_methods(self) -> tuple[list, list]:
         from models import DeliveryMethod
-        # calculate_delivery_price ham ishlatamiz, lekin asosan
-        # order_page_addresses dan keladigan enabled/disabled ni olamiz.
-        # Delivery price ni alohida endpointdan olamiz:
         data = await self._post("/web/v2/orders/calculate_delivery_price/", {})
         enabled_raw = data.get("enabled", []) if isinstance(data, dict) else []
         disabled_raw = data.get("disabled", []) if isinstance(data, dict) else []
 
-        def _parse(items: list) -> list["DeliveryMethod"]:
-            return [DeliveryMethod(
-                id=it.get("id", 0),
-                name=it.get("name", ""),
-                is_home_delivery=it.get("is_home_delivery", False),
-                is_active=it.get("is_active", True),
-            ) for it in items]
+        def _parse(items: list) -> list:
+            return [
+                DeliveryMethod(
+                    id=it.get("id", 0),
+                    name=it.get("name", ""),
+                    is_home_delivery=it.get("is_home_delivery", False),
+                    is_active=it.get("is_active", True),
+                )
+                for it in items
+            ]
 
         return _parse(enabled_raw), _parse(disabled_raw)
 
     async def get_latest_order(self) -> dict:
-        """Oxirgi buyurtma ma'lumotlarini qaytaradi."""
         data = await self._get("/web/v2/orders/latest-order/")
         return data if isinstance(data, dict) else {}
 
     async def create_order(self, payload: dict) -> str:
-        """
-        Buyurtma yaratadi. API list kutadi — bitta element yuboramiz.
-        Muvaffaqiyatli bo'lsa 'Buyurtma muvaffaqiyatli yasaldi' qaytaradi.
-        """
         data = await self._post("/web/v2/orders/create-orders/", [payload])
         if isinstance(data, dict):
             return data.get("data", "")
@@ -316,9 +355,5 @@ class ArosAPIClient:
 
 @asynccontextmanager
 async def get_api_client(token: Optional[str] = None) -> AsyncIterator[ArosAPIClient]:
-    """
-    Handler'larda foydalanish uchun context manager.
-    Token berilsa — autentifikatsiyali so'rovlar yuboriladi.
-    """
     async with ArosAPIClient(token=token) as client:
         yield client
