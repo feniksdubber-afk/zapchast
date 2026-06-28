@@ -124,10 +124,16 @@ class ArosAPIClient:
     # ─── AUTH ────────────────────────────────────────────────────────────────
 
     async def send_sms(self, phone: str) -> None:
-        """Telefon raqamga SMS kod yuboradi."""
+        """Telefon raqamga SMS kod yuboradi.
+
+        Eslatma: Aros API "code" maydonini har doim talab qiladi — SMS
+        hali yuborilmagan bosqichda ham. Shu sabab bo'sh qiymat bilan
+        yuboriladi.
+        """
         await self._post("/web/v2/users/login/", {
             "verification_type": "login",
             "phone_number": phone,
+            "code": "",
         })
 
     async def verify_sms(self, phone: str, code: str) -> str:
