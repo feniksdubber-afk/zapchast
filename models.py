@@ -44,8 +44,10 @@ class UserProfile:
     first_name: str
     last_name: str
     cashback_balance: float
-    warehouse_name: str     # Biriktirilgan ombor nomi
+    warehouse_name: str
     role: str
+    warehouse_id: Optional[int] = None        # Buyurtma uchun kerak: "warehouse"
+    send_warehouse_id: Optional[int] = None   # Buyurtma uchun kerak: "send_warehouse"
 
 
 @dataclass
