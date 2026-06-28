@@ -1,5 +1,6 @@
 """
 Aros Market API klient xizmati.
+Login, mahsulot qidirish, savat operatsiyalari.
 """
 
 import logging
@@ -7,12 +8,12 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 
 from config import settings
-from models import Product
+from models import Product, UserProfile, CartItem
 from services.parser import parse_search_results, parse_similar_products
 
 logger = logging.getLogger(__name__)
@@ -25,14 +26,20 @@ class ArosAPIError(Exception):
 
 
 class ArosAPIClient:
-    def __init__(self) -> None:
+    def __init__(self, token: Optional[str] = None) -> None:
         self._client: httpx.AsyncClient | None = None
+        self._token = token  # Autentifikatsiya tokeni (login qilingan bo'lsa)
+
+    def _build_headers(self) -> dict:
+        headers = {"Accept": "application/json", "User-Agent": "ArosMarketBot/1.0"}
+        if self._token:
+            headers["Authorization"] = f"Token {self._token}"
+        return headers
 
     async def __aenter__(self) -> "ArosAPIClient":
         self._client = httpx.AsyncClient(
-            base_url=settings.AROS_BASE_URL,
             timeout=httpx.Timeout(settings.HTTP_TIMEOUT),
-            headers={"Accept": "application/json", "User-Agent": "ArosMarketBot/1.0"},
+            headers=self._build_headers(),
         )
         return self
 
@@ -40,31 +47,92 @@ class ArosAPIClient:
         if self._client:
             await self._client.aclose()
 
-    async def _get(self, url: str, **params: Any) -> dict | list:
+    def _url(self, path: str) -> str:
+        """To'liq URL yaratadi — v1 yoki web/v2 endpointlar uchun."""
+        if path.startswith("/web/"):
+            return f"https://api.aros.uz/api{path}"
+        return f"{settings.AROS_BASE_URL}{path}"
+
+    async def _request(self, method: str, path: str, **kwargs: Any) -> dict | list:
+        """Umumiy HTTP so'rov metodi."""
         assert self._client
         last_error: Exception | None = None
 
         for attempt in range(1, settings.HTTP_MAX_RETRIES + 1):
             try:
-                response = await self._client.get(url, params=params)
+                response = await self._client.request(method, self._url(path), **kwargs)
+
+                if response.status_code == 401:
+                    raise ArosAPIError("Avtorizatsiya xatoligi. Qayta login qiling.", status_code=401)
                 if response.status_code == 404:
-                    raise ArosAPIError("Mahsulot topilmadi", status_code=404)
+                    raise ArosAPIError("Topilmadi.", status_code=404)
                 if response.status_code >= 500:
                     raise ArosAPIError(f"Server xatoligi: {response.status_code}", status_code=response.status_code)
+
                 response.raise_for_status()
-                return response.json()
+
+                if response.content:
+                    return response.json()
+                return {}
+
             except ArosAPIError:
                 raise
             except httpx.TimeoutException:
                 last_error = ArosAPIError("So'rov vaqti tugadi.")
-                logger.warning("Timeout [urinish %d]: %s", attempt, url)
+                logger.warning("Timeout [urinish %d]: %s", attempt, path)
             except httpx.ConnectError:
                 last_error = ArosAPIError("Internetga ulanib bo'lmadi.")
-                logger.warning("Ulanish xatoligi [urinish %d]: %s", attempt, url)
             except httpx.HTTPStatusError as e:
                 last_error = ArosAPIError(f"HTTP xatoligi: {e.response.status_code}")
 
         raise last_error or ArosAPIError("Noma'lum xatolik.")
+
+    async def _get(self, path: str, **params: Any) -> dict | list:
+        return await self._request("GET", path, params=params)
+
+    async def _post(self, path: str, data: dict) -> dict | list:
+        return await self._request("POST", path, json=data)
+
+    async def _delete(self, path: str) -> dict | list:
+        return await self._request("DELETE", path)
+
+    # ─── AUTH ────────────────────────────────────────────────────────────────
+
+    async def send_sms(self, phone: str) -> None:
+        """Telefon raqamga SMS kod yuboradi."""
+        await self._post("/web/v2/users/login/", {
+            "verification_type": "login",
+            "phone_number": phone,
+        })
+
+    async def verify_sms(self, phone: str, code: str) -> str:
+        """SMS kodni tekshiradi va token qaytaradi."""
+        data = await self._post("/web/v2/users/login/", {
+            "verification_type": "login",
+            "phone_number": phone,
+            "code": code,
+        })
+        token = data.get("token") if isinstance(data, dict) else None
+        if not token:
+            raise ArosAPIError("Token olinmadi. Kod noto'g'ri bo'lishi mumkin.")
+        return token
+
+    async def get_profile(self) -> UserProfile:
+        """Foydalanuvchi profilini qaytaradi (token kerak)."""
+        data = await self._get("/web/v2/users/me/")
+        if not isinstance(data, dict):
+            raise ArosAPIError("Profil ma'lumotlari noto'g'ri.")
+        return UserProfile(
+            id=data.get("id", 0),
+            phone=data.get("username", ""),
+            first_name=data.get("first_name", ""),
+            last_name=data.get("last_name", ""),
+            cashback_balance=float(data.get("cashback_balance", 0)),
+            warehouse_name=(data.get("warehouse") or {}).get("name", ""),
+            role=data.get("role", ""),
+        )
+
+    # ─── MAHSULOT ────────────────────────────────────────────────────────────
 
     async def search(self, query: str) -> list[Product]:
         data = await self._get(
@@ -78,8 +146,56 @@ class ArosAPIClient:
         data = await self._get(f"/product/get_similar_product_variants/{product_id}/")
         return parse_similar_products(data)
 
+    # ─── SAVAT ───────────────────────────────────────────────────────────────
+
+    async def get_cart(self) -> list[CartItem]:
+        """Savatdagi mahsulotlar ro'yxatini qaytaradi."""
+        data = await self._get("/web/v2/cart/items/")
+        items = data if isinstance(data, list) else data.get("results", [])
+
+        cart = []
+        for item in items:
+            variant = item.get("product_variant") or {}
+            # API ba'zan variant ni dict, ba'zan int sifatida berishi mumkin
+            if isinstance(variant, int):
+                variant_id = variant
+                title = item.get("title", "Noma'lum")
+                price = float(item.get("price", 0))
+                image_url = None
+            else:
+                variant_id = variant.get("id", item.get("product_variant_id", 0))
+                title = variant.get("title") or variant.get("name") or item.get("title", "Noma'lum")
+                price = float(variant.get("selling_price") or variant.get("price") or item.get("price", 0))
+                images = variant.get("images") or []
+                image_url = images[0].get("image") if images else None
+
+            cart.append(CartItem(
+                product_variant_id=variant_id,
+                title=title,
+                price=price,
+                quantity=item.get("quantity", 1),
+                image_url=image_url,
+            ))
+        return cart
+
+    async def add_to_cart(self, variant_id: int, quantity: int = 1) -> None:
+        """Savatga mahsulot qo'shadi yoki miqdorini yangilaydi."""
+        await self._post("/web/v2/cart/items/add/", {
+            "origin": "client",
+            "product_variant": variant_id,
+            "quantity": quantity,
+        })
+
+    async def remove_from_cart(self, variant_id: int) -> None:
+        """Savatdan mahsulotni o'chiradi."""
+        await self._delete(f"/web/v2/cart/items/delete/{variant_id}/")
+
 
 @asynccontextmanager
-async def get_api_client() -> AsyncIterator[ArosAPIClient]:
-    async with ArosAPIClient() as client:
+async def get_api_client(token: Optional[str] = None) -> AsyncIterator[ArosAPIClient]:
+    """
+    Handler'larda foydalanish uchun context manager.
+    Token berilsa — autentifikatsiyali so'rovlar yuboriladi.
+    """
+    async with ArosAPIClient(token=token) as client:
         yield client
