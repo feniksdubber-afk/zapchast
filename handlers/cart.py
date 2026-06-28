@@ -265,12 +265,12 @@ async def handle_cart_noop(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "checkout_start")
 async def handle_checkout_start(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
     data = await state.get_data()
     token = data.get("token")
     if not token:
         await callback.answer("❌ Login kerak!", show_alert=True)
         return
+    await callback.answer()
 
     msg = await callback.message.answer("⏳ Yuklanmoqda...")
 
@@ -373,8 +373,9 @@ async def handle_delivery_disabled(callback: CallbackQuery) -> None:
 # CHECKOUT — 3-qadam: Manzil tanlash
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Default region (Toshkent = 1, Farg'ona = 58 — API dan kelganiga qarab)
-DEFAULT_REGION = 58
+# Fallback region (agar profil'dan region_id kelmasa)
+# Toshkent = 1, Farg'ona = 58 — API ga qarab aniqlanadi
+_FALLBACK_REGION = 58
 
 @router.callback_query(F.data.startswith("co_del:"), CheckoutState.delivery)
 async def handle_checkout_delivery(callback: CallbackQuery, state: FSMContext) -> None:
@@ -393,8 +394,10 @@ async def handle_checkout_delivery(callback: CallbackQuery, state: FSMContext) -
     msg = await callback.message.answer("⏳ Manzillar yuklanmoqda...")
     try:
         async with get_api_client(token=token) as api:
+            profile = await api.get_profile()
+            region = profile.region_id or _FALLBACK_REGION
             addresses = await api.get_order_addresses(
-                region=DEFAULT_REGION,
+                region=region,
                 delivery_method=int(del_id),
             )
     except ArosAPIError as e:

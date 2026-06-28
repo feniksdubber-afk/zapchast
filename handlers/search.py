@@ -1,6 +1,7 @@
 """
 Qidiruv va mahsulot ko'rish handlerlari.
 Natijalar kategoriya bo'yicha guruhlanib ko'rsatiladi.
+Cursor-based pagination: "Ko'proq ➡️" tugmasi orqali.
 """
 
 import logging
@@ -18,6 +19,7 @@ from keyboards.inline import (
     build_group_list_keyboard,
     build_variant_list_keyboard,
     build_product_detail_keyboard,
+    build_group_list_keyboard_with_more,
 )
 from models import Product, ProductImage, WarehouseStock
 from services.api_client import ArosAPIError, get_api_client
@@ -113,6 +115,18 @@ async def _send_product(message: Message, product: Product, keyboard) -> None:
     await message.answer(caption, reply_markup=keyboard)
 
 
+def _build_search_summary(query: str, products: list[Product], next_cursor: str | None) -> str:
+    """Qidiruv natijasi xabari matni."""
+    groups = group_products(products)
+    total = sum(g.count for g in groups)
+    group_count = len(groups)
+    more = " (davomi bor ➡️)" if next_cursor else ""
+    return (
+        f"🔍 <b>'{query}'</b> — {total} ta natija, {group_count} ta kategoriya{more}:\n"
+        "Kategoriyani tanlang 👇"
+    )
+
+
 # ─── HANDLER 1: Matnli qidiruv ───────────────────────────────────────────────
 
 @router.message(F.text & ~F.text.startswith("/"))
@@ -125,7 +139,7 @@ async def handle_search(message: Message, state: FSMContext) -> None:
     loading_msg = await message.answer("🔍 Qidirilmoqda...")
     try:
         async with get_api_client() as api:
-            products = await api.search(query)
+            products, next_cursor = await api.search(query)
     except ArosAPIError as e:
         await loading_msg.delete()
         await message.answer(_get_error_text(e))
@@ -140,13 +154,14 @@ async def handle_search(message: Message, state: FSMContext) -> None:
         )
         return
 
-    # Guruhlash
     groups = group_products(products)
 
+    # Yangi qidiruv — oldingi state ni to'liq almashtiramiz
     await state.set_state(SearchState.results)
     await state.update_data(
         products=_products_to_dict(products),
         last_query=query,
+        next_cursor=next_cursor,   # Keyingi sahifa cursor
     )
 
     # Agar faqat 1 ta guruh va 1 ta variant — to'g'ridan detail
@@ -155,20 +170,61 @@ async def handle_search(message: Message, state: FSMContext) -> None:
         await _send_product(message, groups[0].variants[0], keyboard)
         return
 
-    keyboard = build_group_list_keyboard(groups)
-
-    # Guruhlar soni va umumiy variantlar
-    total_variants = sum(g.count for g in groups)
-    group_count = len(groups)
-
+    keyboard = build_group_list_keyboard_with_more(groups, next_cursor)
     await message.answer(
-        f"🔍 <b>'{query}'</b> — {total_variants} ta natija, {group_count} ta kategoriya:\n"
-        "Kategoriyani tanlang 👇",
+        _build_search_summary(query, products, next_cursor),
         reply_markup=keyboard,
     )
 
 
-# ─── HANDLER 2: Kategoriya bosildi → variantlar ─────────────────────────────
+# ─── HANDLER 2: Ko'proq natijalar (pagination) ───────────────────────────────
+
+@router.callback_query(F.data == "search_more")
+async def handle_search_more(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+
+    data = await state.get_data()
+    query = data.get("last_query", "")
+    next_cursor = data.get("next_cursor")
+    existing_products = data.get("products", [])
+
+    if not next_cursor:
+        await callback.message.answer("ℹ️ Boshqa natija yo'q.")
+        return
+
+    loading_msg = await callback.message.answer("🔍 Ko'proq natijalar yuklanmoqda...")
+    try:
+        async with get_api_client() as api:
+            new_products, new_cursor = await api.search(query, search_after=next_cursor)
+    except ArosAPIError as e:
+        await loading_msg.delete()
+        await callback.message.answer(_get_error_text(e))
+        return
+
+    await loading_msg.delete()
+
+    if not new_products:
+        await callback.message.answer("ℹ️ Ko'proq natija topilmadi.")
+        return
+
+    # Yangi mahsulotlarni mavjudlariga QO'SHAMIZ (almashtirmaymiz)
+    all_products_dict = existing_products + _products_to_dict(new_products)
+    await state.update_data(
+        products=all_products_dict,
+        next_cursor=new_cursor,
+    )
+
+    all_products = [_dict_to_product(p) for p in all_products_dict]
+    groups = group_products(all_products)
+    keyboard = build_group_list_keyboard_with_more(groups, new_cursor)
+
+    await callback.message.answer(
+        _build_search_summary(query, all_products, new_cursor),
+        reply_markup=keyboard,
+    )
+
+
+# ─── HANDLER 3: Kategoriya bosildi → variantlar ─────────────────────────────
 
 @router.callback_query(F.data.startswith("group:"))
 async def handle_group_select(callback: CallbackQuery, state: FSMContext) -> None:
@@ -180,8 +236,6 @@ async def handle_group_select(callback: CallbackQuery, state: FSMContext) -> Non
     query = data.get("last_query", "")
 
     all_products = [_dict_to_product(p) for p in saved_products]
-
-    # Shu kategoriyaga tegishli variantlarni topamiz
     groups = group_products(all_products)
     group = next((g for g in groups if g.part_name == part_name), None)
 
@@ -197,7 +251,7 @@ async def handle_group_select(callback: CallbackQuery, state: FSMContext) -> Non
     )
 
 
-# ─── HANDLER 3: Variant/mahsulot detail ─────────────────────────────────────
+# ─── HANDLER 4: Variant/mahsulot detail ─────────────────────────────────────
 
 @router.callback_query(F.data.startswith("product:"))
 async def handle_product_detail(callback: CallbackQuery, state: FSMContext) -> None:
@@ -212,7 +266,7 @@ async def handle_product_detail(callback: CallbackQuery, state: FSMContext) -> N
 
     product_dict = next(
         (p for p in saved_products if str(p["id"]) == str(product_id)),
-        None
+        None,
     )
 
     if not product_dict:
@@ -224,7 +278,7 @@ async def handle_product_detail(callback: CallbackQuery, state: FSMContext) -> N
     await _send_product(callback.message, p, keyboard)
 
 
-# ─── HANDLER 4: Kategoriyalar ro'yxatiga qaytish ────────────────────────────
+# ─── HANDLER 5: Kategoriyalar ro'yxatiga qaytish ────────────────────────────
 
 @router.callback_query(F.data == "back_to_groups")
 async def handle_back_to_groups(callback: CallbackQuery, state: FSMContext) -> None:
@@ -233,6 +287,7 @@ async def handle_back_to_groups(callback: CallbackQuery, state: FSMContext) -> N
     data = await state.get_data()
     saved_products = data.get("products", [])
     query = data.get("last_query", "")
+    next_cursor = data.get("next_cursor")
 
     if not saved_products:
         await callback.message.answer("🔍 Yangi qidiruv uchun mahsulot nomini yozing.")
@@ -240,17 +295,15 @@ async def handle_back_to_groups(callback: CallbackQuery, state: FSMContext) -> N
 
     all_products = [_dict_to_product(p) for p in saved_products]
     groups = group_products(all_products)
-    keyboard = build_group_list_keyboard(groups)
+    keyboard = build_group_list_keyboard_with_more(groups, next_cursor)
 
-    total_variants = sum(g.count for g in groups)
     await callback.message.answer(
-        f"🔍 <b>'{query}'</b> — {total_variants} ta natija:\n"
-        "Kategoriyani tanlang 👇",
+        _build_search_summary(query, all_products, next_cursor),
         reply_markup=keyboard,
     )
 
 
-# ─── HANDLER 5: O'xshash mahsulotlar ────────────────────────────────────────
+# ─── HANDLER 6: O'xshash mahsulotlar ────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("similar:"))
 async def handle_similar_products(callback: CallbackQuery, state: FSMContext) -> None:
@@ -278,12 +331,14 @@ async def handle_similar_products(callback: CallbackQuery, state: FSMContext) ->
 
     groups = group_products(similar_products)
 
+    # Similar natijalari pagination'siz — cursor yo'q
     await state.update_data(
         products=_products_to_dict(similar_products),
         last_query="o'xshash mahsulotlar",
+        next_cursor=None,
     )
 
-    keyboard = build_group_list_keyboard(groups)
+    keyboard = build_group_list_keyboard_with_more(groups, next_cursor=None)
     total = sum(g.count for g in groups)
     await callback.message.answer(
         f"🔗 <b>{total}</b> ta o'xshash mahsulot:",

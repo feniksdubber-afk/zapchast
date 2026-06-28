@@ -162,5 +162,5 @@ async def cmd_profile(message: Message, state: FSMContext) -> None:
 
 @router.message(Command("logout"))
 async def cmd_logout(message: Message, state: FSMContext) -> None:
-    await state.update_data(token=None)
+    await state.clear()
     await message.answer("👋 Tizimdan chiqdingiz.")
