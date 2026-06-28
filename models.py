@@ -60,3 +60,30 @@ class CartItem:
     @property
     def total_price(self) -> float:
         return self.price * self.quantity
+
+
+@dataclass
+class PaymentMethod:
+    """To'lov usuli."""
+    id: int
+    name: str
+    display_name: str
+
+
+@dataclass
+class DeliveryAddress:
+    """Yetkazib berish manzili."""
+    id: int
+    name: str
+    street: str
+    building_number: str | int
+    landmark: Optional[str] = None
+
+
+@dataclass
+class DeliveryMethod:
+    """Yetkazib berish usuli."""
+    id: int
+    name: str
+    is_home_delivery: bool
+    is_active: bool
