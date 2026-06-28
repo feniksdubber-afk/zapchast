@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     HTTP_TIMEOUT: float = 10.0       # Soniyalarda: javob kutish vaqti
     HTTP_MAX_RETRIES: int = 2        # Muvaffaqiyatsiz so'rovni necha marta qayta urinish
 
+    # FSM persistent storage — Railway'da Volume shu papkaga ulanishi kerak
+    # (masalan mount path: /app/data), aks holda deploy/qayta yaratishda
+    # login/savat holatlari yo'qoladi.
+    STORAGE_DIR: str = "./data"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

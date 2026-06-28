@@ -30,7 +30,9 @@ async def main() -> None:
         token=settings.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher(storage=JSONFileStorage(path="fsm_storage.json"))
+    storage_path = os.path.join(settings.STORAGE_DIR, "fsm_storage.json")
+    os.makedirs(settings.STORAGE_DIR, exist_ok=True)
+    dp = Dispatcher(storage=JSONFileStorage(path=storage_path))
 
     # Handlerlar tartibi muhim: auth va cart search'dan oldin
     dp.include_router(start.router)
