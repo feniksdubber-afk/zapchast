@@ -27,9 +27,10 @@ def build_product_caption(product: Product) -> str:
     HTML parse_mode ishlatiladi.
 
     Misol chiqishi:
-        📦 Samsung Galaxy A55
-        💰 Narx: 4 299 000 so'm
-        🏷 Eski narx: ~~5 000 000 so'm~~ (-14%)
+        📦 Xiaomi 9T — Ekran (Oled big)
+        💰 Narx: 370 000 so'm
+        🏷 Eski narx: ~~405 000 so'm~~ (-9%)
+        🛍 Chakana narx: 420 000 so'm
         🔗 Ko'rish
     """
     lines = [f"📦 <b>{product.title}</b>", ""]
@@ -42,6 +43,9 @@ def build_product_caption(product: Product) -> str:
             f"🏷 <s>{format_price(product.old_price)}</s>  "
             f"<b>-{product.discount_percent}%</b>"
         )
+
+    if product.price_b2c is not None and product.price_b2c != product.price:
+        lines.append(f"🛍 <b>Chakana narx:</b> {format_price(product.price_b2c)}")
 
     # Mahsulot havolasi
     if product.url:
@@ -56,8 +60,8 @@ def build_product_button_label(product: Product) -> str:
     Inline tugma uchun qisqa yorliq matnini tayyorlaydi.
     Telegram tugma matn uzunligi cheklangani uchun qisqa saqlanadi.
 
-    Misol: "Samsung A55 — 4 299 000 so'm"
+    Misol: "Xiaomi 9T — Ekran (Oled big) — 370 000 so'm"
     """
-    # Nom 30 belgidan uzun bo'lsa, qirqib qo'yamiz
-    short_title = product.title[:30] + "…" if len(product.title) > 30 else product.title
+    # Nom 35 belgidan uzun bo'lsa, qirqib qo'yamiz (narx ham qo'shilgani uchun)
+    short_title = product.title[:35] + "…" if len(product.title) > 35 else product.title
     return f"{short_title} — {format_price(product.price)}"
