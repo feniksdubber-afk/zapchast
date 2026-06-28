@@ -115,7 +115,7 @@ class ArosAPIClient:
     async def _get(self, path: str, **params: Any) -> dict | list:
         return await self._request("GET", path, params=params)
 
-    async def _post(self, path: str, data: dict) -> dict | list:
+    async def _post(self, path: str, data: dict | list) -> dict | list:
         return await self._request("POST", path, json=data)
 
     async def _delete(self, path: str) -> dict | list:
@@ -209,12 +209,17 @@ class ArosAPIClient:
         return cart
 
     async def add_to_cart(self, variant_id: int, quantity: int = 1) -> None:
-        """Savatga mahsulot qo'shadi yoki miqdorini yangilaydi."""
-        await self._post("/web/v2/cart/items/add/", {
+        """Savatga mahsulot qo'shadi yoki miqdorini yangilaydi.
+
+        Eslatma: Aros API bu endpointga dict o'rniga list (massiv)
+        kutadi — "Expected a list of items but got type 'dict'" xatosi
+        shundan kelib chiqadi.
+        """
+        await self._post("/web/v2/cart/items/add/", [{
             "origin": "client",
             "product_variant": variant_id,
             "quantity": quantity,
-        })
+        }])
 
     async def remove_from_cart(self, variant_id: int) -> None:
         """Savatdan mahsulotni o'chiradi."""
