@@ -22,7 +22,9 @@ def build_product_list_keyboard(products: list[Product]) -> InlineKeyboardMarkup
 
 
 def build_product_detail_keyboard(product: Product) -> InlineKeyboardMarkup:
+    """Mahsulot detail — savatga qo'shish, o'xshashlar, orqaga."""
     builder = InlineKeyboardBuilder()
+    builder.button(text="🛒 Savatga qo'shish", callback_data=f"add_to_cart:{product.id}")
     builder.button(text="🔍 O'xshash mahsulotlar", callback_data=f"similar:{product.id}")
     if product.url:
         builder.button(text="🌐 Saytda ko'rish", url=product.url)
