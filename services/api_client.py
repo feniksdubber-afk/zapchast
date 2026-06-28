@@ -152,14 +152,18 @@ class ArosAPIClient:
         data = await self._get("/user/me/")
         if not isinstance(data, dict):
             raise ArosAPIError("Profil ma'lumotlari noto'g'ri.")
+        warehouse     = data.get("warehouse") or {}
+        send_warehouse = data.get("send_warehouse") or {}
         return UserProfile(
             id=data.get("id", 0),
             phone=data.get("username", ""),
             first_name=data.get("first_name", ""),
             last_name=data.get("last_name", ""),
             cashback_balance=float(data.get("cashback_balance", 0)),
-            warehouse_name=(data.get("warehouse") or {}).get("name", ""),
+            warehouse_name=warehouse.get("name", ""),
             role=data.get("role", ""),
+            warehouse_id=warehouse.get("id") or (warehouse if isinstance(warehouse, int) else None),
+            send_warehouse_id=send_warehouse.get("id") if isinstance(send_warehouse, dict) else send_warehouse or None,
         )
 
     # ─── MAHSULOT ────────────────────────────────────────────────────────────
@@ -299,12 +303,14 @@ class ArosAPIClient:
 
     async def create_order(self, payload: dict) -> str:
         """
-        Buyurtma yaratadi.
-        Muvaffaqiyatli bo'lsa 'Buyurtma muvaffaqiyatli yasaldi' xabarini qaytaradi.
+        Buyurtma yaratadi. API list kutadi — bitta element yuboramiz.
+        Muvaffaqiyatli bo'lsa 'Buyurtma muvaffaqiyatli yasaldi' qaytaradi.
         """
-        data = await self._post("/web/v2/orders/create-orders/", payload)
+        data = await self._post("/web/v2/orders/create-orders/", [payload])
         if isinstance(data, dict):
             return data.get("data", "")
+        if isinstance(data, list) and data:
+            return data[0].get("data", "") if isinstance(data[0], dict) else ""
         return ""
 
 
