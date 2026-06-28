@@ -21,6 +21,36 @@ def format_price(amount: float) -> str:
     return f"{formatted} so'm"
 
 
+def _format_delivery_note(product: Product) -> str | None:
+    """
+    Eng tezroq yetkazib bo'ladigan ombor asosida yetkazish vaqtini
+    matn qilib qaytaradi. Agar 'available=True' ombor bo'lsa — hozir
+    yetkazsa bo'ladi. Aks holda eng kichik days_after bo'yicha
+    "Ertaga 16:00" kabi matn tuziladi.
+    """
+    stocks = [w for w in product.warehouse_stocks if w.quantity > 0]
+    if not stocks:
+        return None
+
+    ready_now = next((w for w in stocks if w.available), None)
+    if ready_now:
+        return None  # Hozir mavjud — alohida eslatma kerak emas
+
+    soonest = min(
+        (w for w in stocks if w.days_after is not None),
+        key=lambda w: w.days_after,
+        default=None,
+    )
+    if not soonest:
+        return None
+
+    day_word = "Bugun" if soonest.days_after == 0 else (
+        "Ertaga" if soonest.days_after == 1 else f"{soonest.days_after} kundan keyin"
+    )
+    time_part = f" {soonest.deliver_at[:5]}" if soonest.deliver_at else ""
+    return f"⏰ Yetkazib berish vaqti: {day_word}{time_part}"
+
+
 def build_product_caption(product: Product) -> str:
     """
     Mahsulot uchun Telegram xabari matnini (caption) tayyorlaydi.
@@ -34,6 +64,7 @@ def build_product_caption(product: Product) -> str:
         🏬 Omborda mavjud: 9 ta
            • Farg'ona: 0
            • Asosiy ombor: 9
+        ⏰ Yetkazib berish vaqti: Ertaga 16:00
         🔗 Ko'rish
     """
     lines = [f"📦 <b>{product.title}</b>", ""]
@@ -56,6 +87,10 @@ def build_product_caption(product: Product) -> str:
         lines.append(f"🏬 <b>Omborda mavjud:</b> {product.total_stock} ta")
         for w in product.warehouse_stocks:
             lines.append(f"   • {w.name}: {w.quantity}")
+
+        delivery_note = _format_delivery_note(product)
+        if delivery_note:
+            lines.append(delivery_note)
 
     # Mahsulot havolasi
     if product.url:
