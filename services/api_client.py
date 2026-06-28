@@ -3,6 +3,7 @@ Aros Market API klient xizmati.
 Login, mahsulot qidirish, savat operatsiyalari.
 """
 
+import asyncio
 import logging
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -54,7 +55,13 @@ class ArosAPIClient:
         return f"{settings.AROS_BASE_URL}{path}"
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict | list:
-        """Umumiy HTTP so'rov metodi."""
+        """Umumiy HTTP so'rov metodi.
+
+        Faqat vaqtincha bo'lishi mumkin bo'lgan xatolar qayta uriniladi:
+        timeout, ulanish xatosi, va 5xx server xatolari. 4xx (400/401/404)
+        — bu mijoz xatosi, qayta urinish natijani o'zgartirmaydi, shuning
+        uchun darhol ko'tariladi.
+        """
         assert self._client
         last_error: Exception | None = None
 
@@ -66,8 +73,22 @@ class ArosAPIClient:
                     raise ArosAPIError("Avtorizatsiya xatoligi. Qayta login qiling.", status_code=401)
                 if response.status_code == 404:
                     raise ArosAPIError("Topilmadi.", status_code=404)
+                if response.status_code == 400:
+                    detail = response.text
+                    try:
+                        body = response.json()
+                        detail = body.get("detail") or body.get("message") or str(body)
+                    except Exception:
+                        pass
+                    logger.warning("400 Bad Request [%s]: %s", path, detail)
+                    raise ArosAPIError(f"So'rov xato: {detail}", status_code=400)
                 if response.status_code >= 500:
-                    raise ArosAPIError(f"Server xatoligi: {response.status_code}", status_code=response.status_code)
+                    last_error = ArosAPIError(f"Server xatoligi: {response.status_code}", status_code=response.status_code)
+                    logger.warning("5xx xato [urinish %d/%d]: %s -> %d", attempt, settings.HTTP_MAX_RETRIES, path, response.status_code)
+                    if attempt < settings.HTTP_MAX_RETRIES:
+                        await asyncio.sleep(0.5 * attempt)
+                        continue
+                    raise last_error
 
                 response.raise_for_status()
 
@@ -79,11 +100,15 @@ class ArosAPIClient:
                 raise
             except httpx.TimeoutException:
                 last_error = ArosAPIError("So'rov vaqti tugadi.")
-                logger.warning("Timeout [urinish %d]: %s", attempt, path)
+                logger.warning("Timeout [urinish %d/%d]: %s", attempt, settings.HTTP_MAX_RETRIES, path)
             except httpx.ConnectError:
                 last_error = ArosAPIError("Internetga ulanib bo'lmadi.")
+                logger.warning("Ulanish xatosi [urinish %d/%d]: %s", attempt, settings.HTTP_MAX_RETRIES, path)
             except httpx.HTTPStatusError as e:
                 last_error = ArosAPIError(f"HTTP xatoligi: {e.response.status_code}")
+
+            if attempt < settings.HTTP_MAX_RETRIES:
+                await asyncio.sleep(0.5 * attempt)
 
         raise last_error or ArosAPIError("Noma'lum xatolik.")
 
