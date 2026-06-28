@@ -19,6 +19,7 @@ class Product:
     old_price: Optional[float]
     images: list[ProductImage] = field(default_factory=list)
     url: Optional[str] = None
+    price_b2c: Optional[float] = None  # Oddiy mijoz narxi (B2C)
 
     @property
     def has_discount(self) -> bool:
