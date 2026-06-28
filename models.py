@@ -16,6 +16,9 @@ class WarehouseStock:
     """Bitta ombordagi mahsulot miqdori."""
     name: str
     quantity: int
+    available: bool = True            # Hozir shu ombordan sotib bo'ladimi
+    deliver_at: Optional[str] = None  # Masalan "16:00:00" — yetkazish vaqti
+    days_after: Optional[int] = None  # Necha kundan keyin yetkaziladi (0/None = bugun)
 
 
 @dataclass
