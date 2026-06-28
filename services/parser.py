@@ -161,12 +161,16 @@ def _extract_brand_from_raw(raw: dict) -> str:
 
 def _build_title(raw: dict) -> str:
     """
-    Mahsulot nomini quradi: Brand Model — Kategoriya (Sifat)
+    Mahsulot nomini quradi: Brand Model — Kategoriya (Sifat, Rang)
+
+    Rang va sifat ikkalasi ham qavsga qo'shiladi — bu korpus/krişka
+    kabi mahsulotlarda bir xil sifat lekin turli rang bo'lganda
+    foydalanuvchi farq qila olishi uchun muhim.
 
     Misol:
-      cursor-search: "Samsung Galaxy A12 (A125) — Ekran (Original Frame)"
-      similar:       "Tecno Spark Go 2023 — Ekran (Original)"
-      NOVA V (brand yo'q): "NOVA V — Ekran (Original)"
+      Ekran:  "Samsung Galaxy A12 — Ekran (Original Frame, Qora)"
+      Korpus: "Samsung Galaxy A12 — Korpus va korpus qismlari (Original, Ko'k)"
+      Ekran (cursor-search, attribute yo'q): "Samsung Galaxy A12 — Ekran (Original Frame)"
     """
     base_name = (raw.get("name_uz") or raw.get("name") or "").strip()
 
@@ -178,14 +182,15 @@ def _build_title(raw: dict) -> str:
     category = raw.get("category") or {}
     part_name = (category.get("name_uz") or category.get("name") or "").strip()
 
-    # "Sifati" qiymatini attribute_values ichidan topamiz.
+    # Rang va sifatni attribute_values dan ajratib olamiz.
     # Ikkita format mavjud:
     #   1. cursor-search: {id, value_uz} — "attribute" kalit YO'Q
-    #      → rang nomlariga mos kelmaydigan birinchi qiymat "sifat"
-    #   2. similar/category: {id, value_uz, attribute: {name_uz: "Sifati"}}
-    #      → "Sifati" nomli attribute aniq topiladi
-    quality = None
-    fallback_candidates: list[str] = []
+    #      → rang va sifatni color_hex + _COLOR_NAMES orqali ajratamiz
+    #   2. similar/category: {id, value_uz, attribute: {name_uz: "Sifati"/"Rangi"}}
+    #      → nomli attribute orqali aniq topiladi
+    quality: str | None = None
+    color: str | None = None
+    fallback_non_color: list[str] = []
 
     for attr_val in raw.get("attribute_values") or []:
         if not isinstance(attr_val, dict):
@@ -193,24 +198,39 @@ def _build_title(raw: dict) -> str:
         attr = attr_val.get("attribute") or {}
         attr_name = (attr.get("name_uz") or attr.get("name") or "").lower()
         value = attr_val.get("value_uz") or attr_val.get("value")
+        if not value:
+            continue
 
         if "sifat" in attr_name or "quality" in attr_name:
             quality = value
-            break
+        elif "rang" in attr_name or "color" in attr_name:
+            color = value
+        else:
+            # attribute kalit yo'q (cursor-search) — rang/sifatni heuristic aniqlash
+            is_color = bool(attr_val.get("color_hex")) or (
+                value.strip().lower() in _COLOR_NAMES
+            )
+            if is_color:
+                if color is None:
+                    color = value
+            else:
+                fallback_non_color.append(value)
 
-        is_color = bool(attr_val.get("color_hex")) or (
-            value and value.strip().lower() in _COLOR_NAMES
-        )
-        if value and not is_color:
-            fallback_candidates.append(value)
+    # cursor-search da sifat aniq nomlanmagan — fallback ishlatiladi
+    if quality is None and fallback_non_color:
+        quality = fallback_non_color[0]
 
-    if quality is None and fallback_candidates:
-        quality = fallback_candidates[0]
+    # Qavsga: avval sifat, keyin rang (agar mavjud bo'lsa)
+    qualifiers: list[str] = []
+    if quality:
+        qualifiers.append(quality)
+    if color:
+        qualifiers.append(color)
 
     parts = [p for p in [base_name, part_name] if p]
     title = " — ".join(parts) if parts else base_name
-    if quality:
-        title += f" ({quality})"
+    if qualifiers:
+        title += f" ({', '.join(qualifiers)})"
     return title.strip(" —")
 
 
