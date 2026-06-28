@@ -181,7 +181,18 @@ class ArosAPIClient:
     async def get_cart(self) -> list[CartItem]:
         """Savatdagi mahsulotlar ro'yxatini qaytaradi."""
         data = await self._get("/web/v2/cart/items/")
-        items = data if isinstance(data, list) else data.get("results", [])
+        logger.debug("get_cart raw response type=%s keys=%s", type(data).__name__,
+                     list(data.keys()) if isinstance(data, dict) else "list")
+        logger.info("get_cart raw data: %s", data)
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            # Barcha mumkin bo'lgan key'larni tekshiramiz
+            items = (data.get("results")
+                     or data.get("items")
+                     or data.get("data")
+                     or data.get("cart_items")
+                     or [])
 
         cart = []
         for item in items:
