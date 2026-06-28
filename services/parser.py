@@ -15,14 +15,22 @@ def _parse_warehouses(raw: dict) -> list[WarehouseStock]:
     """
     Mahsulotning har bir ombordagi miqdorini ajratib oladi.
 
-    Aros API'da bu maydonning aniq nomi va shakli hali tasdiqlanmagan,
-    shuning uchun bir nechta mumkin bo'lgan variantlar sinab ko'riladi.
-    Agar hech biri mos kelmasa — bo'sh ro'yxat qaytadi va xom javob
-    DEBUG logga yoziladi, shunda haqiqiy struktura Railway logidan
-    ko'rib, shu funksiyani moslashtirish mumkin bo'ladi.
+    Aros API'da bu ro'yxat "variation_quantity" kaliti ostida keladi:
+        "variation_quantity": [
+            {"warehouse": {"name_uz": "Farg'ona", ...}, "quantity": 1,
+             "available": true, "deliver_at": null, "days_after": null},
+            {"warehouse": {"name_uz": "Asosiy ombor", ...}, "quantity": 28,
+             "available": false, "deliver_at": "16:00:00", "days_after": 1},
+            ...
+        ]
+
+    Boshqa nomlar (warehouses, stocks va h.k.) zaxira variant sifatida
+    qoldirilgan — agar Aros API kelajakda boshqa endpointda boshqacha
+    kalit ishlatsa ham parser ishlashda davom etadi.
     """
     candidates = (
-        raw.get("warehouses")
+        raw.get("variation_quantity")
+        or raw.get("warehouses")
         or raw.get("warehouse_stocks")
         or raw.get("stocks")
         or raw.get("remains")
@@ -43,7 +51,7 @@ def _parse_warehouses(raw: dict) -> list[WarehouseStock]:
             continue
 
         # Ombor nomi turlicha joylashgan bo'lishi mumkin:
-        # {"name": "..."} yoki {"warehouse": {"name": "..."}} yoki {"warehouse": {"name_uz": "..."}}
+        # {"name": "..."} yoki {"warehouse": {"name_uz": "..."}}
         warehouse_obj = item.get("warehouse")
         if isinstance(warehouse_obj, dict):
             name = (
@@ -73,8 +81,18 @@ def _parse_warehouses(raw: dict) -> list[WarehouseStock]:
         except (ValueError, TypeError):
             quantity = 0
 
+        available = item.get("available", True)
+        deliver_at = item.get("deliver_at")
+        days_after = item.get("days_after")
+
         if name:
-            result.append(WarehouseStock(name=name, quantity=quantity))
+            result.append(WarehouseStock(
+                name=name,
+                quantity=quantity,
+                available=bool(available),
+                deliver_at=deliver_at,
+                days_after=days_after,
+            ))
 
     if not result:
         logger.debug(
