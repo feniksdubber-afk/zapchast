@@ -236,6 +236,77 @@ class ArosAPIClient:
         """Savatdan mahsulotni o'chiradi."""
         await self._delete(f"/web/v2/cart/items/delete/{variant_id}/")
 
+    # ─── CHECKOUT ────────────────────────────────────────────────────────────
+
+    async def get_payment_methods(self) -> list["PaymentMethod"]:
+        """To'lov usullarini qaytaradi."""
+        from models import PaymentMethod
+        data = await self._get("/web/v2/orders/payment_methods/")
+        items = data if isinstance(data, list) else data.get("results", [])
+        result = []
+        for item in items:
+            result.append(PaymentMethod(
+                id=item.get("id", 0),
+                name=item.get("name", ""),
+                display_name=item.get("display_name") or item.get("name", ""),
+            ))
+        return result
+
+    async def get_order_addresses(self, region: int, delivery_method: int) -> list["DeliveryAddress"]:
+        """Mintaqa va yetkazish usuliga mos manzillarni qaytaradi."""
+        from models import DeliveryAddress
+        data = await self._get(
+            "/web/v2/orders/order_page_addresses/",
+            region=region,
+            delivery_method=delivery_method,
+        )
+        items = data if isinstance(data, list) else data.get("results", [])
+        result = []
+        for item in items:
+            result.append(DeliveryAddress(
+                id=item.get("id", 0),
+                name=item.get("name", ""),
+                street=item.get("street", ""),
+                building_number=item.get("building_number", ""),
+                landmark=item.get("landmark"),
+            ))
+        return result
+
+    async def get_delivery_methods(self) -> tuple[list["DeliveryMethod"], list["DeliveryMethod"]]:
+        """Enabled va disabled yetkazib berish usullarini qaytaradi."""
+        from models import DeliveryMethod
+        # calculate_delivery_price ham ishlatamiz, lekin asosan
+        # order_page_addresses dan keladigan enabled/disabled ni olamiz.
+        # Delivery price ni alohida endpointdan olamiz:
+        data = await self._post("/web/v2/orders/calculate_delivery_price/", {})
+        enabled_raw = data.get("enabled", []) if isinstance(data, dict) else []
+        disabled_raw = data.get("disabled", []) if isinstance(data, dict) else []
+
+        def _parse(items: list) -> list["DeliveryMethod"]:
+            return [DeliveryMethod(
+                id=it.get("id", 0),
+                name=it.get("name", ""),
+                is_home_delivery=it.get("is_home_delivery", False),
+                is_active=it.get("is_active", True),
+            ) for it in items]
+
+        return _parse(enabled_raw), _parse(disabled_raw)
+
+    async def get_latest_order(self) -> dict:
+        """Oxirgi buyurtma ma'lumotlarini qaytaradi."""
+        data = await self._get("/web/v2/orders/latest-order/")
+        return data if isinstance(data, dict) else {}
+
+    async def create_order(self, payload: dict) -> str:
+        """
+        Buyurtma yaratadi.
+        Muvaffaqiyatli bo'lsa 'Buyurtma muvaffaqiyatli yasaldi' xabarini qaytaradi.
+        """
+        data = await self._post("/web/v2/orders/create-orders/", payload)
+        if isinstance(data, dict):
+            return data.get("data", "")
+        return ""
+
 
 @asynccontextmanager
 async def get_api_client(token: Optional[str] = None) -> AsyncIterator[ArosAPIClient]:
