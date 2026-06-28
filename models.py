@@ -12,6 +12,13 @@ class ProductImage:
 
 
 @dataclass
+class WarehouseStock:
+    """Bitta ombordagi mahsulot miqdori."""
+    name: str
+    quantity: int
+
+
+@dataclass
 class Product:
     id: str | int
     title: str
@@ -20,6 +27,7 @@ class Product:
     images: list[ProductImage] = field(default_factory=list)
     url: Optional[str] = None
     price_b2c: Optional[float] = None  # Oddiy mijoz narxi (B2C)
+    warehouse_stocks: list[WarehouseStock] = field(default_factory=list)
 
     @property
     def has_discount(self) -> bool:
@@ -34,6 +42,11 @@ class Product:
     @property
     def main_image_url(self) -> Optional[str]:
         return self.images[0].url if self.images else None
+
+    @property
+    def total_stock(self) -> int:
+        """Barcha omborlardagi mahsulot sonini qo'shib qaytaradi."""
+        return sum(w.quantity for w in self.warehouse_stocks)
 
 
 @dataclass
