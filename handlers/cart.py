@@ -464,11 +464,41 @@ async def handle_checkout_confirm(callback: CallbackQuery, state: FSMContext) ->
 
     msg = await callback.message.answer("⏳ Buyurtma yuborilmoqda...")
 
+    # Profil ma'lumotlarini olamiz (warehouse, recipient uchun)
+    try:
+        async with get_api_client(token=token) as api:
+            profile = await api.get_profile()
+    except ArosAPIError as e:
+        await msg.delete()
+        await callback.message.answer(f"❌ Profil xatoligi: {e}")
+        await state.set_state(None)
+        return
+
+    items_raw = data.get("checkout_items", [])
+
     payload = {
-        "payment_method": data.get("checkout_payment_id"),
         "delivery_method": data.get("checkout_delivery_id"),
+        "payment_method":  data.get("checkout_payment_id"),
         "address":         data.get("checkout_address_id"),
+        "warehouse":       profile.warehouse_id,
+        "send_warehouse":  profile.send_warehouse_id,
+        "recipient": {
+            "first_name":   profile.first_name,
+            "last_name":    profile.last_name,
+            "phone_number": profile.phone,
+        },
+        "order_products": [
+            {
+                "product_variant": it["id"],
+                "quantity":        it["quantity"],
+                "origin":          "client",
+            }
+            for it in items_raw
+        ],
+        "payment_deadline": None,
     }
+
+    logger.debug("create_order payload: %s", payload)
 
     try:
         async with get_api_client(token=token) as api:
