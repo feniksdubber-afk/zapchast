@@ -1,2 +1,0 @@
-// DB package placeholder
-export {};
