@@ -149,7 +149,7 @@ class ArosAPIClient:
 
     async def get_profile(self) -> UserProfile:
         """Foydalanuvchi profilini qaytaradi (token kerak)."""
-        data = await self._get("/web/v2/users/me/")
+        data = await self._get("/user/me/")
         if not isinstance(data, dict):
             raise ArosAPIError("Profil ma'lumotlari noto'g'ri.")
         return UserProfile(
