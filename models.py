@@ -64,6 +64,7 @@ class UserProfile:
     role: str
     warehouse_id: Optional[int] = None        # Buyurtma uchun kerak: "warehouse"
     send_warehouse_id: Optional[int] = None   # Buyurtma uchun kerak: "send_warehouse"
+    region_id: Optional[int] = None           # Manzil tanlash uchun: checkout 3-qadam
 
 
 @dataclass
