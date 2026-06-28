@@ -19,7 +19,7 @@ from keyboards.inline import (
     build_variant_list_keyboard,
     build_product_detail_keyboard,
 )
-from models import Product, ProductImage
+from models import Product, ProductImage, WarehouseStock
 from services.api_client import ArosAPIError, get_api_client
 from services.grouping import group_products, ProductGroup
 from utils.formatting import build_product_caption
@@ -61,6 +61,9 @@ def _products_to_dict(products: list[Product]) -> list[dict]:
             "images": [img.url for img in p.images],
             "url": p.url,
             "price_b2c": p.price_b2c,
+            "warehouse_stocks": [
+                {"name": w.name, "quantity": w.quantity} for w in p.warehouse_stocks
+            ],
         }
         for p in products
     ]
@@ -75,6 +78,10 @@ def _dict_to_product(d: dict) -> Product:
         images=[ProductImage(url=u) for u in d.get("images", [])],
         url=d.get("url"),
         price_b2c=d.get("price_b2c"),
+        warehouse_stocks=[
+            WarehouseStock(name=w["name"], quantity=w["quantity"])
+            for w in d.get("warehouse_stocks", [])
+        ],
     )
 
 
