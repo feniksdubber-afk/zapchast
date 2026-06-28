@@ -62,7 +62,14 @@ def _products_to_dict(products: list[Product]) -> list[dict]:
             "url": p.url,
             "price_b2c": p.price_b2c,
             "warehouse_stocks": [
-                {"name": w.name, "quantity": w.quantity} for w in p.warehouse_stocks
+                {
+                    "name": w.name,
+                    "quantity": w.quantity,
+                    "available": w.available,
+                    "deliver_at": w.deliver_at,
+                    "days_after": w.days_after,
+                }
+                for w in p.warehouse_stocks
             ],
         }
         for p in products
@@ -79,7 +86,13 @@ def _dict_to_product(d: dict) -> Product:
         url=d.get("url"),
         price_b2c=d.get("price_b2c"),
         warehouse_stocks=[
-            WarehouseStock(name=w["name"], quantity=w["quantity"])
+            WarehouseStock(
+                name=w["name"],
+                quantity=w["quantity"],
+                available=w.get("available", True),
+                deliver_at=w.get("deliver_at"),
+                days_after=w.get("days_after"),
+            )
             for w in d.get("warehouse_stocks", [])
         ],
     )
