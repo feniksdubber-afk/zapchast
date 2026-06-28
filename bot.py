@@ -5,6 +5,12 @@ Asosiy ishga tushirish fayli.
 
 import asyncio
 import logging
+import sys
+import os
+
+# Loyiha root papkasini Python path'ga qo'shamiz
+# Bu Railway, VPS, local — barcha muhitlarda ishlaydi
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
