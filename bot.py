@@ -22,6 +22,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     datefmt="%H:%M:%S",
 )
+logging.getLogger("services.api_client").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
