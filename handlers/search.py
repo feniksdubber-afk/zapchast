@@ -5,18 +5,16 @@ Qidiruv va mahsulot ko'rish handlerlari.
 import logging
 import sys
 import os
+import json
 
-# handlers/ papkasining ustidagi root'ni path'ga qo'shamiz
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InputMediaPhoto, Message
+from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
-from keyboards.inline import (
-    build_product_detail_keyboard,
-    build_product_list_keyboard,
-    build_similar_keyboard,
-)
+from keyboards.inline import build_product_list_keyboard, build_product_detail_keyboard
 from models import Product
 from services.api_client import ArosAPIError, get_api_client
 from utils.formatting import build_product_caption
@@ -33,6 +31,11 @@ ERROR_MESSAGES = {
 }
 
 
+class SearchState(StatesGroup):
+    """Qidiruv natijalari holatini saqlash uchun FSM."""
+    results = State()
+
+
 def _get_error_text(error: ArosAPIError) -> str:
     if error.status_code:
         return ERROR_MESSAGES.get(error.status_code, ERROR_MESSAGES["default"])
@@ -44,7 +47,36 @@ def _get_error_text(error: ArosAPIError) -> str:
     return ERROR_MESSAGES["default"]
 
 
-async def _send_product_photo(message: Message, product: Product, keyboard) -> None:
+def _products_to_dict(products: list[Product]) -> list[dict]:
+    """Product ro'yxatini JSON'ga saqlash uchun dict'ga aylantiradi."""
+    return [
+        {
+            "id": str(p.id),
+            "title": p.title,
+            "price": p.price,
+            "old_price": p.old_price,
+            "images": [img.url for img in p.images],
+            "url": p.url,
+        }
+        for p in products
+    ]
+
+
+def _dict_to_product(d: dict) -> Product:
+    """Dict'dan Product modelini qayta tiklaydi."""
+    from models import ProductImage
+    return Product(
+        id=d["id"],
+        title=d["title"],
+        price=d["price"],
+        old_price=d.get("old_price"),
+        images=[ProductImage(url=u) for u in d.get("images", [])],
+        url=d.get("url"),
+    )
+
+
+async def _send_product(message: Message, product: Product, keyboard) -> None:
+    """Mahsulotni rasm yoki matn sifatida yuboradi."""
     caption = build_product_caption(product)
     if product.main_image_url:
         try:
@@ -62,7 +94,7 @@ async def _send_product_photo(message: Message, product: Product, keyboard) -> N
 # ─── HANDLER 1: Matnli qidiruv ───────────────────────────────────────────────
 
 @router.message(F.text & ~F.text.startswith("/"))
-async def handle_search(message: Message) -> None:
+async def handle_search(message: Message, state: FSMContext) -> None:
     query = message.text.strip()
     if len(query) < 2:
         await message.answer("✏️ Kamida 2 ta harf kiriting.")
@@ -86,6 +118,10 @@ async def handle_search(message: Message) -> None:
         )
         return
 
+    # Natijalarni FSM state'ga saqlaymiz — tugma bosilganda topib olinadi
+    await state.set_state(SearchState.results)
+    await state.update_data(products=_products_to_dict(products))
+
     keyboard = build_product_list_keyboard(products)
     await message.answer(
         f"✅ <b>'{query}'</b> bo'yicha <b>{len(products)}</b> ta natija topildi:\n"
@@ -97,34 +133,35 @@ async def handle_search(message: Message) -> None:
 # ─── HANDLER 2: Mahsulot detail ──────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("product:"))
-async def handle_product_detail(callback: CallbackQuery) -> None:
+async def handle_product_detail(callback: CallbackQuery, state: FSMContext) -> None:
     product_id = callback.data.split(":", 1)[1]
     await callback.answer()
-
-    try:
-        async with get_api_client() as api:
-            similar = await api.get_similar(product_id)
-    except ArosAPIError as e:
-        logger.error("Similar API xatoligi: %s", e)
-        similar = []
 
     if not callback.message:
         return
 
-    if similar:
-        main = similar[0]
-        keyboard = build_product_detail_keyboard(main)
-        await _send_product_photo(callback.message, main, keyboard)
-    else:
-        await callback.message.answer(
-            "ℹ️ Ushbu mahsulot haqida qo'shimcha ma'lumot topilmadi."
-        )
+    # FSM'dan saqlangan natijalar ichidan ID bo'yicha topamiz
+    data = await state.get_data()
+    saved_products = data.get("products", [])
+
+    product = next(
+        (p for p in saved_products if str(p["id"]) == str(product_id)),
+        None
+    )
+
+    if not product:
+        await callback.message.answer("❌ Mahsulot ma'lumotlari topilmadi. Qayta qidiring.")
+        return
+
+    p = _dict_to_product(product)
+    keyboard = build_product_detail_keyboard(p)
+    await _send_product(callback.message, p, keyboard)
 
 
 # ─── HANDLER 3: O'xshash mahsulotlar ─────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("similar:"))
-async def handle_similar_products(callback: CallbackQuery) -> None:
+async def handle_similar_products(callback: CallbackQuery, state: FSMContext) -> None:
     product_id = callback.data.split(":", 1)[1]
     await callback.answer()
 
@@ -147,6 +184,10 @@ async def handle_similar_products(callback: CallbackQuery) -> None:
         await callback.message.answer("😕 O'xshash mahsulotlar topilmadi.")
         return
 
+    # O'xshash natijalarni ham state'ga saqlaymiz
+    await state.update_data(products=_products_to_dict(similar_products))
+
+    from keyboards.inline import build_product_list_keyboard
     keyboard = build_product_list_keyboard(similar_products)
     await callback.message.answer(
         f"🔗 <b>{len(similar_products)}</b> ta o'xshash mahsulot topildi:",
