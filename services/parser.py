@@ -129,26 +129,55 @@ def _parse_price(value: Any) -> float | None:
         return None
 
 
+_COLOR_NAMES = {
+    "qora", "oq", "qizil", "ko'k", "kok", "yashil", "sariq", "kulrang",
+    "kumush", "oltin", "pushti", "binafsha", "jigarrang", "to'q ko'k",
+    "och ko'k", "moviy", "black", "white", "red", "blue", "green",
+    "yellow", "gray", "grey", "silver", "gold", "pink", "purple", "brown",
+}
+
+
 def _build_title(raw: dict) -> str:
     """
     Telefon modeli + ehtiyot qism turi + sifat ko'rinishida nom yasaydi.
     Masalan: "Xiaomi 9T/9T Pro/K20/K20 Pro — Ekran (Oled big)"
+
+    Aros API'ning search natijasida attribute_values elementlarida
+    "attribute" (masalan {"name_uz": "Sifati"}) kaliti kelmaydi — faqat
+    {"id", "value", "value_uz", ...} bor. Shu sababli Sifat qiymatini
+    aniqlash uchun rang nomlari ro'yxatidan FOYDALANMAYDIGAN birinchi
+    qiymat "sifat" deb olinadi (rang odatda birinchi keladi, lekin
+    ishonchli bo'lishi uchun rang ro'yxati bilan ham solishtiriladi).
     """
     base_name = (raw.get("name_uz") or raw.get("name") or "").strip()
 
     category = raw.get("category") or {}
     part_name = (category.get("name_uz") or category.get("name") or "").strip()
 
-    # "Sifati" attributini attribute_values ichidan topamiz (rang emas)
+    # "Sifati" qiymatini attribute_values ichidan topamiz.
+    # Avval "attribute": {"name_uz": "Sifati"} strukturasi bo'lsa shuni ishlatamiz
+    # (boshqa endpointlarda shu shaklda kelishi mumkin), aks holda rang
+    # ro'yxatiga mos kelmaydigan qiymatni "sifat" deb olamiz.
     quality = None
+    fallback_candidates: list[str] = []
     for attr_val in raw.get("attribute_values") or []:
         if not isinstance(attr_val, dict):
             continue
         attr = attr_val.get("attribute") or {}
         attr_name = (attr.get("name_uz") or attr.get("name") or "").lower()
+        value = attr_val.get("value_uz") or attr_val.get("value")
         if "sifat" in attr_name or "quality" in attr_name:
-            quality = attr_val.get("value_uz") or attr_val.get("value")
+            quality = value
             break
+        # color_hex mavjudligi — bu element rang ekanligining ishonchli belgisi
+        is_color = bool(attr_val.get("color_hex")) or (
+            value and value.strip().lower() in _COLOR_NAMES
+        )
+        if value and not is_color:
+            fallback_candidates.append(value)
+
+    if quality is None and fallback_candidates:
+        quality = fallback_candidates[0]
 
     parts = [p for p in [base_name, part_name] if p]
     title = " — ".join(parts) if parts else base_name
