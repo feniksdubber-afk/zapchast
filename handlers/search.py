@@ -57,6 +57,7 @@ def _products_to_dict(products: list[Product]) -> list[dict]:
             "old_price": p.old_price,
             "images": [img.url for img in p.images],
             "url": p.url,
+            "price_b2c": p.price_b2c,
         }
         for p in products
     ]
@@ -72,6 +73,7 @@ def _dict_to_product(d: dict) -> Product:
         old_price=d.get("old_price"),
         images=[ProductImage(url=u) for u in d.get("images", [])],
         url=d.get("url"),
+        price_b2c=d.get("price_b2c"),
     )
 
 
